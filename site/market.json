@@ -1,198 +1,198 @@
 [
   {
     "symbol": "XRPUSDT",
-    "price": 1.541,
-    "r1": -0.0037496767520041052,
-    "r6": -0.004907658530285408,
-    "r24": -0.03693519155052816,
-    "z": -1.6681120825989222,
-    "vr": 0.4027600751040349,
+    "price": 1.5392,
+    "r1": -0.002268749594866226,
+    "r6": -0.00856682769726258,
+    "r24": -0.027546120798584872,
+    "z": -1.644038286295062,
+    "vr": 0.5368449111453649,
     "direction": "DOWN",
-    "confidence": 0.5973,
-    "anomaly": 0.556,
+    "confidence": 0.6019,
+    "anomaly": 0.548,
     "models": [
       {
         "name": "momentum-v1",
         "direction": "DOWN",
-        "probability": 0.6717,
-        "raw": -0.17172
+        "probability": 0.6798,
+        "raw": -0.17982
       },
       {
         "name": "breakout-v1",
         "direction": "DOWN",
         "probability": 0.95,
-        "raw": -0.57272
+        "raw": -0.55055
       },
       {
         "name": "mean-reversion-v1",
         "direction": "UP",
         "probability": 0.95,
-        "raw": 0.53631
+        "raw": 0.52384
       }
     ],
     "source": "Coinbase Exchange"
   },
   {
     "symbol": "DOGEUSDT",
-    "price": 0.0973,
-    "r1": -0.0030737704918033515,
-    "r6": -0.0013342912860515588,
-    "r24": -0.014084507042253502,
-    "z": -1.0970876873193454,
-    "vr": 0.7533204901825695,
+    "price": 0.09712,
+    "r1": -0.002055076037813408,
+    "r6": -0.008372472942617892,
+    "r24": -0.007967313585291125,
+    "z": -1.4026668657398476,
+    "vr": 0.5435709644266101,
     "direction": "DOWN",
-    "confidence": 0.5329,
-    "anomaly": 0.366,
+    "confidence": 0.5643,
+    "anomaly": 0.468,
     "models": [
       {
         "name": "momentum-v1",
         "direction": "DOWN",
-        "probability": 0.5611,
-        "raw": -0.06105
+        "probability": 0.6135,
+        "raw": -0.11349
       },
       {
         "name": "breakout-v1",
         "direction": "DOWN",
-        "probability": 0.8939,
-        "raw": -0.39395
+        "probability": 0.95,
+        "raw": -0.49857
       },
       {
         "name": "mean-reversion-v1",
         "direction": "UP",
-        "probability": 0.8969,
-        "raw": 0.39687
-      }
-    ],
-    "source": "Coinbase Exchange"
-  },
-  {
-    "symbol": "BTCUSDT",
-    "price": 84081.46,
-    "r1": -0.0008754071201600988,
-    "r6": 0.002369977299241599,
-    "r24": -0.004405618095537189,
-    "z": 0.7153725203545841,
-    "vr": 0.3191436742349818,
-    "direction": "DOWN",
-    "confidence": 0.5593,
-    "anomaly": 0.238,
-    "models": [
-      {
-        "name": "momentum-v1",
-        "direction": "UP",
-        "probability": 0.5099,
-        "raw": 0.00993
-      },
-      {
-        "name": "breakout-v1",
-        "direction": "UP",
-        "probability": 0.6553,
-        "raw": 0.15528
-      },
-      {
-        "name": "mean-reversion-v1",
-        "direction": "DOWN",
-        "probability": 0.7698,
-        "raw": -0.2698
-      }
-    ],
-    "source": "Coinbase Exchange"
-  },
-  {
-    "symbol": "ETHUSDT",
-    "price": 2690.12,
-    "r1": 0.0004202321317670066,
-    "r6": 0.001824803926680163,
-    "r24": -0.009966141616369772,
-    "z": 0.5418063954542963,
-    "vr": 0.5190375683226196,
-    "direction": "DOWN",
-    "confidence": 0.5555,
-    "anomaly": 0.181,
-    "models": [
-      {
-        "name": "momentum-v1",
-        "direction": "DOWN",
-        "probability": 0.5144,
-        "raw": -0.01437
-      },
-      {
-        "name": "breakout-v1",
-        "direction": "UP",
-        "probability": 0.6243,
-        "raw": 0.12435
-      },
-      {
-        "name": "mean-reversion-v1",
-        "direction": "DOWN",
-        "probability": 0.7079,
-        "raw": -0.20792
+        "probability": 0.95,
+        "raw": 0.46746
       }
     ],
     "source": "Coinbase Exchange"
   },
   {
     "symbol": "BNBUSDT",
-    "price": 774.48,
-    "r1": -0.0007741136398823345,
-    "r6": 0.003082502266545717,
-    "r24": -0.0039354888494481655,
-    "z": 0.20582753005153764,
-    "vr": 0.5214452632202561,
+    "price": 772.53,
+    "r1": -0.0017702545548520243,
+    "r6": -0.0014993085085759361,
+    "r24": -0.0020023770152957088,
+    "z": -1.0946289407857364,
+    "vr": 0.7487738755719616,
     "direction": "DOWN",
-    "confidence": 0.5277,
-    "anomaly": 0.069,
+    "confidence": 0.5116,
+    "anomaly": 0.365,
     "models": [
       {
         "name": "momentum-v1",
-        "direction": "UP",
-        "probability": 0.5189,
-        "raw": 0.01893
+        "direction": "DOWN",
+        "probability": 0.5224,
+        "raw": -0.02238
       },
       {
         "name": "breakout-v1",
-        "direction": "UP",
-        "probability": 0.5081,
-        "raw": 0.00809
+        "direction": "DOWN",
+        "probability": 0.8939,
+        "raw": -0.39391
       },
       {
         "name": "mean-reversion-v1",
+        "direction": "UP",
+        "probability": 0.8958,
+        "raw": 0.39581
+      }
+    ],
+    "source": "Coinbase Exchange"
+  },
+  {
+    "symbol": "ETHUSDT",
+    "price": 2685.31,
+    "r1": -0.0011493825323612983,
+    "r6": -0.0020069052406243015,
+    "r24": -0.0034143499189093207,
+    "z": -0.8514596086473499,
+    "vr": 0.7672964527136746,
+    "direction": "DOWN",
+    "confidence": 0.5208,
+    "anomaly": 0.284,
+    "models": [
+      {
+        "name": "momentum-v1",
         "direction": "DOWN",
-        "probability": 0.5759,
-        "raw": -0.07588
+        "probability": 0.5324,
+        "raw": -0.03241
+      },
+      {
+        "name": "breakout-v1",
+        "direction": "DOWN",
+        "probability": 0.8217,
+        "raw": -0.32169
+      },
+      {
+        "name": "mean-reversion-v1",
+        "direction": "UP",
+        "probability": 0.8174,
+        "raw": 0.31738
       }
     ],
     "source": "Coinbase Exchange"
   },
   {
     "symbol": "SOLUSDT",
-    "price": 121.04,
-    "r1": -0.0018965943761852788,
-    "r6": 0.006904583645287454,
-    "r24": 0.002733824869522117,
-    "z": -0.17642662614569823,
-    "vr": 0.45931025479585336,
-    "direction": "UP",
-    "confidence": 0.5158,
-    "anomaly": 0.059,
+    "price": 120.65,
+    "r1": -0.0033867503717164293,
+    "r6": -0.0007454033460326803,
+    "r24": 0.009792433880147389,
+    "z": -0.7464649447721567,
+    "vr": 0.5655616441121605,
+    "direction": "DOWN",
+    "confidence": 0.5044,
+    "anomaly": 0.249,
     "models": [
       {
         "name": "momentum-v1",
         "direction": "UP",
-        "probability": 0.5809,
-        "raw": 0.0809
+        "probability": 0.5251,
+        "raw": 0.02505
       },
       {
         "name": "breakout-v1",
         "direction": "DOWN",
-        "probability": 0.6373,
-        "raw": -0.13725
+        "probability": 0.8168,
+        "raw": -0.31679
       },
       {
         "name": "mean-reversion-v1",
         "direction": "UP",
-        "probability": 0.5842,
-        "raw": 0.08418
+        "probability": 0.784,
+        "raw": 0.28396
+      }
+    ],
+    "source": "Coinbase Exchange"
+  },
+  {
+    "symbol": "BTCUSDT",
+    "price": 83959.17,
+    "r1": -0.0009236430853676314,
+    "r6": -0.0017210850576286907,
+    "r24": 0.0006723259163345929,
+    "z": -0.4253505797560522,
+    "vr": 0.8471020215882632,
+    "direction": "DOWN",
+    "confidence": 0.5134,
+    "anomaly": 0.142,
+    "models": [
+      {
+        "name": "momentum-v1",
+        "direction": "DOWN",
+        "probability": 0.5157,
+        "raw": -0.0157
+      },
+      {
+        "name": "breakout-v1",
+        "direction": "DOWN",
+        "probability": 0.6722,
+        "raw": -0.17222
+      },
+      {
+        "name": "mean-reversion-v1",
+        "direction": "UP",
+        "probability": 0.6642,
+        "raw": 0.16418
       }
     ],
     "source": "Coinbase Exchange"
