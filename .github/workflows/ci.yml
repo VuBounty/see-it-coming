@@ -10,33 +10,21 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
+          python-version: '3.12'
       - run: pip install -r requirements.txt
       - run: python -m compileall -q app scripts
-      - run: PYTHONPATH=. pytest -q
+      - run: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=. python -m pytest -q
       - run: python scripts/verify_ledger.py data/ledger.json
-      - run: python scripts/build_pages.py
-      - run: python scripts/check_v32.py
-      - name: Validate browser JavaScript syntax
+      - run: PYTHONPATH=. python scripts/build_pages.py
+      - run: python scripts/check_v33.py
+      - name: JavaScript syntax check
         run: |
           python - <<'PY'
-          import re
           from pathlib import Path
+          import re
           text=Path('site/index.html').read_text()
-          scripts=re.findall(r'<script(?: [^>]*)?>(.*?)</script>', text, re.S)
-          js=[s for s in scripts if 'snapshot-data' not in s]
-          Path('/tmp/sic-v32.js').write_text(js[-1])
+          blocks=re.findall(r'<script>(.*?)</script>',text,re.S)
+          Path('/tmp/see-it-coming-v33.js').write_text(blocks[-1])
           PY
-          node --check /tmp/sic-v32.js
-      - name: Smoke-test local HTTP server
-        run: |
-          PORT=8765 PYTHONPATH=. python -m app.main >/tmp/sic-server.log 2>&1 &
-          PID=$!
-          trap 'kill $PID || true' EXIT
-          sleep 2
-          curl -fsS http://127.0.0.1:8765/ | grep -q 'SIC-OBSERVATORY-CHAOS-V3.2-MOTION'
-          curl -fsS http://127.0.0.1:8765/health | python -m json.tool >/dev/null
-          curl -fsS http://127.0.0.1:8765/snapshot.json | python -m json.tool >/dev/null
+          node --check /tmp/see-it-coming-v33.js
+

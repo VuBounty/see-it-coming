@@ -1,6 +1,4 @@
-import json
-import html
-import sys
+import json, html, math, sys
 from datetime import datetime, timezone
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -8,420 +6,275 @@ from concurrent.futures import ThreadPoolExecutor
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from app.market import klines_with_source, features, score
+from app.market import klines_with_source, features, score, market_universe
 from app.presentation import market_state, scientific_metrics, forecast_ui_state
 
-LEDGER_PATH = ROOT / "data" / "ledger.json"
-OUT = ROOT / "site"
+LEDGER_PATH = ROOT / 'data' / 'ledger.json'
+OUT = ROOT / 'site'
 OUT.mkdir(exist_ok=True)
-SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"]
+CORE = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','DOGEUSDT']
+UNIVERSE_LIMIT = 100
 STALE_AFTER_MINUTES = 90
 
 
-def esc(value):
-    return html.escape(str(value))
+def esc(v):
+    return html.escape(str(v))
 
 
-def evidence_map(prediction):
+def evmap(p):
     out = {}
-    for item in prediction.get("evidence", []):
-        if "=" in item:
-            key, value = item.split("=", 1)
-            out[key] = value
+    for item in p.get('evidence', []):
+        if '=' in item:
+            k, v = item.split('=', 1)
+            out[k] = v
     return out
 
 
-def polyline(values, width=100.0, height=28.0, pad=2.0):
+def polyline(values, w=100.0, h=28.0, pad=2.0):
     if not values:
-        return ""
+        return ''
     if len(values) == 1:
-        return f"0,{height/2:.2f} {width},{height/2:.2f}"
+        return f'0,{h/2:.2f} {w},{h/2:.2f}'
     lo, hi = min(values), max(values)
-    span = (hi - lo) or 1.0
-    pts = []
-    for i, value in enumerate(values):
-        x = i / (len(values) - 1) * width
-        y = height - pad - ((value - lo) / span) * (height - 2 * pad)
-        pts.append(f"{x:.2f},{y:.2f}")
-    return " ".join(pts)
+    span = (hi-lo) or 1.0
+    pts=[]
+    for i,val in enumerate(values):
+        x=i/(len(values)-1)*w
+        y=h-pad-((val-lo)/span)*(h-2*pad)
+        pts.append(f'{x:.2f},{y:.2f}')
+    return ' '.join(pts)
 
 
-def pct(value, digits=1):
-    return "—" if value is None else f"{value * 100:.{digits}f}%"
+def pct(x, d=1):
+    return '—' if x is None else f'{x*100:.{d}f}%'
 
 
-def decimal(value, digits=3):
-    return "—" if value is None else f"{value:.{digits}f}"
+def dec(x, d=3):
+    return '—' if x is None else f'{x:.{d}f}'
 
 
-ledger = json.loads(LEDGER_PATH.read_text()) if LEDGER_PATH.exists() else {"predictions": [], "resolutions": []}
-predictions = ledger.get("predictions", [])
-resolutions = ledger.get("resolutions", [])
-resolution_map = {row["prediction_id"]: row for row in resolutions}
+def price_text(v):
+    v=float(v)
+    if v >= 1000: return f'{v:,.0f}'
+    if v >= 1: return f'{v:,.4f}'.rstrip('0').rstrip('.')
+    if v >= .01: return f'{v:.5f}'.rstrip('0').rstrip('.')
+    return f'{v:.8f}'.rstrip('0').rstrip('.')
+
+
+def stable_seed(text):
+    return sum((i+1)*ord(c) for i,c in enumerate(text)) % 10000
+
+
+ledger = json.loads(LEDGER_PATH.read_text()) if LEDGER_PATH.exists() else {'predictions':[], 'resolutions':[]}
+predictions = ledger.get('predictions', [])
+resolutions = ledger.get('resolutions', [])
+resolution_map = {r['prediction_id']: r for r in resolutions}
 metrics = scientific_metrics(predictions, resolutions)
 generated_at = datetime.now(timezone.utc).isoformat()
+locked_assets = {p['asset'] for p in predictions if p['id'] not in resolution_map}
 
-unresolved_ids = {p["id"] for p in predictions if p["id"] not in resolution_map}
-locked_assets = {p["asset"] for p in predictions if p["id"] in unresolved_ids}
 
-def load_asset(symbol):
+def load_core(symbol):
     try:
-        bars, source = klines_with_source(symbol, limit=72)
+        bars, provider = klines_with_source(symbol, limit=72)
         feat = features(bars)
-        model_score = score(feat)
+        s = score(feat)
         return {
-            "symbol": symbol,
-            "price": feat["price"],
-            "r1": feat["r1"],
-            "r6": feat["r6"],
-            "r24": feat["r24"],
-            "z": feat["z"],
-            "vr": feat["vr"],
-            "anomaly": model_score["anomaly"],
-            "direction": model_score["direction"],
-            "confidence": model_score["confidence"],
-            "provider": source,
-            "state": market_state(model_score["anomaly"], symbol in locked_assets),
-            "bars": [{"t": int(row["t"]), "c": float(row["c"])} for row in bars[-36:]],
+            'symbol': symbol, 'price': feat['price'], 'r1': feat['r1'], 'r6': feat['r6'], 'r24': feat['r24'],
+            'z': feat['z'], 'vr': feat['vr'], 'anomaly': s['anomaly'], 'direction': s['direction'],
+            'confidence': s['confidence'], 'provider': provider,
+            'state': market_state(s['anomaly'], symbol in locked_assets),
+            'bars': [{'t': int(x['t']), 'c': float(x['c'])} for x in bars[-36:]],
         }
-    except Exception as exc:
-        return {"symbol": symbol, "error": str(exc), "provider": "unavailable", "state": "NO DATA", "bars": []}
+    except Exception as ex:
+        return {'symbol':symbol, 'error':str(ex), 'provider':'unavailable', 'state':'NO DATA', 'bars':[]}
 
-with ThreadPoolExecutor(max_workers=len(SYMBOLS)) as executor:
-    by_symbol = {asset["symbol"]: asset for asset in executor.map(load_asset, SYMBOLS)}
-assets = [by_symbol[symbol] for symbol in SYMBOLS]
+with ThreadPoolExecutor(max_workers=len(CORE)) as ex:
+    core_assets = list(ex.map(load_core, CORE))
+core_map = {x['symbol']:x for x in core_assets}
+core_ok = [x for x in core_assets if 'error' not in x]
 
-available = sum(1 for asset in assets if "error" not in asset)
-initial_status = "LIVE" if available == len(SYMBOLS) else ("DEGRADED" if available else "NO DATA")
-latest = predictions[-1] if predictions else None
-latest_resolution = resolution_map.get(latest["id"]) if latest else None
-latest_evidence = evidence_map(latest) if latest else {}
-latest_ui_state = None
-if latest:
-    latest_ui_state = forecast_ui_state(latest["created_at"], latest_resolution.get("outcome") if latest_resolution else None)
-
-snapshot = {
-    "version": "V3.2-MOTION",
-    "generated_at": generated_at,
-    "stale_after_minutes": STALE_AFTER_MINUTES,
-    "system_status_at_build": initial_status,
-    "available_assets": available,
-    "total_assets": len(SYMBOLS),
-    "assets": assets,
-    "metrics": metrics,
-    "latest_forecast": latest,
-    "latest_resolution": latest_resolution,
-    "latest_ui_state": latest_ui_state,
-}
-
-asset_positions = [(8, 13), (39, 4), (72, 13), (12, 61), (44, 69), (74, 60)]
-asset_cards = []
-for index, symbol in enumerate(SYMBOLS):
-    asset = next(row for row in assets if row["symbol"] == symbol)
-    left, top = asset_positions[index]
-    short = symbol.replace("USDT", "")
-    if "error" in asset:
-        asset_cards.append(f'''
-        <div class="asset-node no-data" data-symbol="{esc(symbol)}" style="--x:{left}%;--y:{top}%;--delay:{index * -1.2}s">
-          <div class="node-top"><b>{esc(short)}</b><span>NO DATA</span></div>
-          <div class="node-state">UNAVAILABLE</div>
-        </div>''')
-        continue
-    move = float(asset["r24"]) * 100
-    move_class = "gain" if move >= 0 else "loss"
-    arrow = "↑" if move >= 0 else "↓"
-    path = polyline([row["c"] for row in asset["bars"]], width=100, height=26)
-    anomaly = float(asset["anomaly"])
-    drift = 4 + anomaly * 12
-    duration = 13 - anomaly * 6
-    pulse = 4.2 - anomaly * 2.0
-    asset_cards.append(f'''
-    <div class="asset-node {move_class}" data-symbol="{esc(symbol)}" data-anomaly="{anomaly:.3f}"
-         style="--x:{left}%;--y:{top}%;--drift:{drift:.1f}px;--duration:{duration:.2f}s;--pulse:{pulse:.2f}s;--delay:{index * -1.15}s">
-      <div class="node-top"><b>{esc(short)}</b><span>{arrow} {move:+.2f}%</span></div>
-      <svg class="mini-chart" viewBox="0 0 100 26" preserveAspectRatio="none" aria-label="{esc(short)} price sparkline"><polyline points="{path}"/></svg>
-      <div class="node-foot"><span>{esc(asset['state'])}</span><em>A {anomaly:.2f}</em></div>
-    </div>''')
-asset_cards_html = "".join(asset_cards)
-
-noise_rows = []
-for asset in assets:
-    short = asset["symbol"].replace("USDT", "")
-    if "error" in asset:
-        noise_rows.append(f"<tr><td>{esc(short)}</td><td>—</td><td>—</td><td>NO DATA</td></tr>")
-    else:
-        move = asset["r24"] * 100
-        cls = "pos" if move >= 0 else "neg"
-        noise_rows.append(
-            f"<tr><td>{esc(short)}</td><td>{asset['price']:.8g}</td><td class='{cls}'>{move:+.2f}%</td><td>{esc(asset['state'])}</td></tr>"
-        )
-noise_rows_html = "".join(noise_rows)
-
-stream_rows = []
-for asset in assets:
-    if "error" in asset:
-        continue
-    short = asset["symbol"].replace("USDT", "")
-    cls = "pos" if asset["r24"] >= 0 else "neg"
-    stream_rows.append(
-        f"<div class='stream-row' data-stream-row><span>SNAPSHOT</span><b>{esc(short)}</b><strong>{asset['price']:.8g}</strong><em class='{cls}'>{asset['r24']*100:+.2f}%</em></div>"
-    )
-stream_rows_html = "".join(stream_rows) or "<div class='stream-row'><span>—</span><b>MARKET FEED</b><strong>UNAVAILABLE</strong><em>—</em></div>"
-
-if latest:
-    direction = latest.get("direction", "—")
-    arrow = "↑" if direction == "UP" else "↓"
-    direction_class = "up" if direction == "UP" else "down"
-    latest_asset = latest["asset"].replace("USDT", "")
-    outcome = latest_resolution.get("outcome") if latest_resolution else "UNKNOWN"
-    latest_forecast_html = f'''
-      <div class="forecast-identity">
-        <div class="coin-emblem">{esc(latest_asset[:2])}</div>
-        <div><h3>{esc(latest_asset)} / USD</h3><div class="forecast-dir {direction_class}">{arrow} {esc(direction)}</div>
-        <div class="forecast-prob">{float(latest['probability'])*100:.1f}<small>%</small></div><span>MODEL PROBABILITY</span></div>
-      </div>
-      <div class="forecast-facts">
-        <div><span>Entry observation</span><b>{esc(latest_evidence.get('entry','—'))}</b></div>
-        <div><span>Target move</span><b>{esc(latest.get('target_pct','—'))}%</b></div>
-        <div><span>Horizon</span><b>{esc(latest.get('horizon_hours','—'))}H</b></div>
-        <div><span>Decision threshold</span><b>53.0%</b></div>
-        <div><span>Locked at</span><b>{esc(latest.get('created_at','—'))[:19]} UTC</b></div>
-        <div><span>Outcome</span><b>{esc(outcome)}</b></div>
-      </div>'''
-    def bar_width(key, scale, base=18):
+# Broad market universe. It is independent from the prediction list.
+universe_source='unavailable'
+universe=[]
+universe_error=None
+universe_generated_at=generated_at
+universe_cached=False
+try:
+    universe, universe_source = market_universe(UNIVERSE_LIMIT)
+    (OUT/'universe.json').write_text(json.dumps({'generated_at':generated_at,'source':universe_source,'assets':universe}, indent=2))
+except Exception as ex:
+    universe_error=str(ex)
+    cache=OUT/'universe.json'
+    if cache.exists():
         try:
-            return min(100, abs(float(latest_evidence.get(key, 0))) * scale + base)
+            cached=json.loads(cache.read_text())
+            universe=cached.get('assets',[])
+            universe_source=(cached.get('source') or 'cached')+' · CACHE'
+            universe_generated_at=cached.get('generated_at') or generated_at
+            universe_cached=True
         except Exception:
-            return base
-    why_html = "".join([
-        f"<div class='why-row'><span>Momentum 6H</span><i><u style='width:{bar_width('r6',1800):.0f}%'></u></i><b>{esc(latest_evidence.get('r6','—'))}</b></div>",
-        f"<div class='why-row'><span>Momentum 24H</span><i><u style='width:{bar_width('r24',900):.0f}%'></u></i><b>{esc(latest_evidence.get('r24','—'))}</b></div>",
-        f"<div class='why-row'><span>Price deviation</span><i><u style='width:{bar_width('z',28):.0f}%'></u></i><b>{esc(latest_evidence.get('z','—'))}</b></div>",
-        f"<div class='why-row'><span>Volume ratio</span><i><u style='width:{bar_width('vr',42):.0f}%'></u></i><b>{esc(latest_evidence.get('vr','—'))}</b></div>",
-    ])
-    proof_hash = latest.get("proof_hash", "—")
-    forecast_status = latest_resolution.get("outcome") if latest_resolution else "LOCKED"
-else:
-    latest_asset = "—"
-    latest_forecast_html = "<div class='empty-state'>NO LOCKED FORECAST YET</div>"
-    why_html = "<div class='empty-state'>WAITING FOR A QUALIFIED SIGNAL</div>"
-    proof_hash = "—"
-    forecast_status = "WAITING"
+            universe=[]
 
-latest_asset_data = next((a for a in assets if latest and a["symbol"] == latest["asset"] and "error" not in a), None)
-if latest_asset_data:
-    main_chart_points = polyline([row["c"] for row in latest_asset_data["bars"]], width=100, height=100, pad=8)
-    chart_provider = latest_asset_data["provider"]
-else:
-    main_chart_points = ""
-    chart_provider = "unavailable"
+# Never invent a market universe. If no broad provider/cache exists, show the real core data only and mark degraded.
+if not universe:
+    for x in core_ok:
+        universe.append({
+            'id':x['symbol'], 'symbol':x['symbol'].replace('USDT',''), 'name':x['symbol'].replace('USDT',''),
+            'price':x['price'], 'change_24h':x['r24']*100, 'market_cap_rank':None, 'market_cap':None,
+            'volume_24h':None, 'sparkline':[b['c'] for b in x['bars']], 'source':x['provider']
+        })
+    universe_source='CORE FALLBACK'
+    universe_generated_at=generated_at
+    universe_cached=False
 
-cal_rows = []
-for lo, hi in [(0.50,0.60),(0.60,0.70),(0.70,0.80),(0.80,0.90),(0.90,1.01)]:
-    vals = []
-    for p in predictions:
-        r = resolution_map.get(p["id"])
-        if r and r.get("outcome") in ("CORRECT", "WRONG"):
-            probability = float(p["probability"])
-            if lo <= probability < hi:
-                vals.append(1 if r["outcome"] == "CORRECT" else 0)
-    observed = sum(vals)/len(vals) if vals else None
-    cal_rows.append((f"{int(lo*100)}–{int(min(1,hi)*100)}%", observed, len(vals)))
-calibration_html = "".join(
-    f"<div class='cal-line'><span>{band}</span><div><i style='width:{0 if observed is None else observed*100:.1f}%'></i></div><b>{'waiting' if observed is None else f'{observed*100:.1f}%'}</b><em>N={count}</em></div>"
-    for band, observed, count in reversed(cal_rows)
+# de-duplicate and sanitize
+seen=set(); clean=[]
+for row in universe:
+    sym=str(row.get('symbol') or '').upper().strip()
+    if not sym or sym in seen or row.get('price') is None:
+        continue
+    seen.add(sym)
+    rr=dict(row); rr['symbol']=sym
+    rr['change_24h']=float(rr.get('change_24h') or 0.0)
+    rr['price']=float(rr['price'])
+    rr['sparkline']=[float(v) for v in (rr.get('sparkline') or []) if v is not None][-48:]
+    clean.append(rr)
+universe=clean[:UNIVERSE_LIMIT]
+
+available_core=len(core_ok)
+market_status='LIVE' if available_core==len(CORE) and len(universe)>=30 and not universe_cached else ('DEGRADED' if (available_core or universe) else 'NO DATA')
+
+latest=predictions[-1] if predictions else None
+latest_resolution=resolution_map.get(latest['id']) if latest else None
+latest_evidence=evmap(latest) if latest else {}
+latest_ui_state=forecast_ui_state(latest['created_at'], latest_resolution.get('outcome') if latest_resolution else None) if latest else None
+
+snapshot={
+    'version':'V3.3-DEMO-MATCH', 'generated_at':generated_at, 'stale_after_minutes':STALE_AFTER_MINUTES,
+    'system_status_at_build':market_status, 'available_core_assets':available_core, 'total_core_assets':len(CORE),
+    'universe_count':len(universe), 'universe_source':universe_source, 'universe_error':universe_error,
+    'universe_generated_at':universe_generated_at, 'universe_cached':universe_cached, 'freshness_anchor':universe_generated_at if universe_cached else generated_at,
+    'core_assets':core_assets, 'universe':universe, 'metrics':metrics,
+    'latest_forecast':latest, 'latest_resolution':latest_resolution, 'latest_ui_state':latest_ui_state,
+}
+(OUT/'snapshot.json').write_text(json.dumps(snapshot, indent=2))
+(OUT/'ledger.json').write_text(json.dumps(ledger, indent=2))
+
+# ---------- HERO CHAOS: cards from entire market, not prediction list ----------
+# rank by a blend of prominence and absolute 24h movement; keep BTC/ETH visible when available.
+majors={'BTC':0,'ETH':1,'SOL':2,'BNB':3,'XRP':4,'DOGE':5}
+def visual_rank(r):
+    major_bonus=1000-majors.get(r['symbol'],999)*70 if r['symbol'] in majors else 0
+    cap_bonus=max(0,180-(r.get('market_cap_rank') or 999))
+    return major_bonus + cap_bonus + min(250,abs(r['change_24h'])*13)
+visual_pool=sorted(universe, key=visual_rank, reverse=True)
+hero_assets=[]
+for r in visual_pool:
+    if r['symbol'] not in {x['symbol'] for x in hero_assets}:
+        hero_assets.append(r)
+    if len(hero_assets)>=18: break
+
+# Fixed composition inspired by the approved golden reference. Secondary cards add controlled density.
+slots=[
+ (8,13,190,1.08),(37,5,210,1.15),(69,13,180,1.03),(9,61,180,1.00),(42,70,185,1.06),(72,60,190,1.02),
+ (23,29,145,.86),(57,30,150,.88),(30,76,132,.78),(62,75,140,.82),(50,13,136,.82),(79,37,132,.80),
+ (16,42,126,.76),(67,46,126,.76),(34,48,118,.72),(54,56,118,.72),(25,8,112,.68),(82,70,112,.68)
+]
+hero_cards=[]
+for idx,row in enumerate(hero_assets):
+    left,top,width,scale=slots[idx]
+    ch=row['change_24h']; gain=ch>=0; cls='gain' if gain else 'loss'; arrow='↑' if gain else '↓'
+    spark=polyline(row.get('sparkline',[]),100,24) if row.get('sparkline') else ''
+    seed=stable_seed(row['symbol'])
+    drift=4+(seed%10); dur=8+(seed%8); delay=-(seed%7)
+    hero_cards.append(f'''<div class="market-card {cls} {'secondary' if idx>=6 else ''}" data-chaos-card data-symbol="{esc(row['symbol'])}" style="left:{left}%;top:{top}%;width:{width}px;--drift:{drift}px;--dur:{dur}s;--delay:{delay}s;--scale:{scale}">
+      <div class="mc-head"><b>{esc(row['symbol'])}</b><strong>{arrow} {ch:+.2f}%</strong></div>
+      <div class="mc-price">${esc(price_text(row['price']))}</div>
+      <svg viewBox="0 0 100 24" preserveAspectRatio="none">{f'<polyline points="{spark}"/>' if spark else ''}</svg>
+    </div>''')
+hero_cards_html=''.join(hero_cards)
+
+# Micro market labels from broader universe to make the chaos field dense without pretending they are forecasted.
+micro=[]
+for idx,row in enumerate(universe[18:60]):
+    seed=stable_seed(row['symbol'])
+    left=4+(seed*7)%88; top=5+(seed*11)%86
+    ch=row['change_24h']; cls='pos' if ch>=0 else 'neg'
+    micro.append(f'<span class="micro-token {cls}" style="left:{left}%;top:{top}%;--d:{12+(seed%15)}s;--dl:{-(seed%10)}s">{esc(row["symbol"])} {ch:+.1f}%</span>')
+micro_html=''.join(micro)
+
+# Right market board: most active by abs 24h change from broad universe.
+movers=sorted(universe,key=lambda r:abs(r['change_24h']),reverse=True)[:12]
+market_rows=''.join(
+    f'<tr><td>{esc(r["symbol"])}</td><td>{esc(price_text(r["price"]))}</td><td class="{"pos" if r["change_24h"]>=0 else "neg"}">{r["change_24h"]:+.2f}%</td><td><span class="trend-dot {"pos" if r["change_24h"]>=0 else "neg"}"></span></td></tr>'
+    for r in movers
+)
+# Tape interleaves gainers/losers from entire universe.
+tape_pool=sorted(universe,key=lambda r:abs(r['change_24h']),reverse=True)[:18]
+tape_rows=''.join(
+    f'<div class="tape-row"><span>SNAPSHOT</span><b>{esc(r["symbol"])}</b><strong>{esc(price_text(r["price"]))}</strong><em class="{"pos" if r["change_24h"]>=0 else "neg"}">{r["change_24h"]:+.2f}%</em></div>'
+    for r in tape_pool
 )
 
-recent_rows = []
-for prediction in reversed(predictions[-6:]):
-    resolution = resolution_map.get(prediction["id"])
-    status = resolution.get("outcome") if resolution else "LOCKED"
-    direction_class = "pos" if prediction["direction"] == "UP" else "neg"
-    recent_rows.append(
-        f"<tr><td>{esc(prediction['id'][-6:])}</td><td>{esc(prediction['asset'].replace('USDT',''))}</td>"
-        f"<td class='{direction_class}'>{esc(prediction['direction'])}</td><td>{float(prediction['probability'])*100:.1f}%</td><td>{esc(status)}</td></tr>"
-    )
-recent_rows_html = "".join(recent_rows) if recent_rows else "<tr><td colspan='5'>No public predictions yet.</td></tr>"
-
-feature_context = []
+# ---------- latest forecast ----------
 if latest:
-    feature_context = [
-        ("24H MOMENTUM", latest_evidence.get("r24", "—")),
-        ("6H MOMENTUM", latest_evidence.get("r6", "—")),
-        ("PRICE DEVIATION", latest_evidence.get("z", "—")),
-        ("VOLUME RATIO", latest_evidence.get("vr", "—")),
-    ]
-context_html = "".join(f"<div><span>{label}</span><b>{esc(value)}</b></div>" for label, value in feature_context) if feature_context else "<div><span>HISTORICAL CONTEXT</span><b>COLLECTING</b></div>"
+    la=latest['asset'].replace('USDT',''); direction=latest.get('direction','—'); arrow='↑' if direction=='UP' else '↓'; dcls='up' if direction=='UP' else 'down'
+    outcome=latest_resolution.get('outcome') if latest_resolution else 'UNKNOWN'
+    latest_html=f'''<div class="forecast-identity"><div class="coin-emblem">{esc(la[:2])}</div><div><h3>{esc(la)} / USD</h3><div class="forecast-dir {dcls}">{arrow} {esc(direction)}</div><div class="forecast-prob">{float(latest['probability'])*100:.1f}<small>%</small></div><span>MODEL PROBABILITY</span></div></div>
+    <div class="forecast-facts"><div><span>Entry observation</span><b>{esc(latest_evidence.get('entry','—'))}</b></div><div><span>Target move</span><b>{esc(latest.get('target_pct','—'))}%</b></div><div><span>Horizon</span><b>{esc(latest.get('horizon_hours','—'))}H</b></div><div><span>Decision threshold</span><b>53.0%</b></div><div><span>Locked at</span><b>{esc(latest.get('created_at','—'))[:19]} UTC</b></div><div><span>Outcome</span><b>{esc(outcome)}</b></div></div>'''
+    def bw(key,scale,base=18):
+        try:return min(100,abs(float(latest_evidence.get(key,0)))*scale+base)
+        except:return base
+    why_html=''.join([
+      f'<div class="why-row"><span>Momentum 6H</span><i><u style="width:{bw("r6",1800):.0f}%"></u></i><b>{esc(latest_evidence.get("r6","—"))}</b></div>',
+      f'<div class="why-row"><span>Momentum 24H</span><i><u style="width:{bw("r24",900):.0f}%"></u></i><b>{esc(latest_evidence.get("r24","—"))}</b></div>',
+      f'<div class="why-row"><span>Price deviation</span><i><u style="width:{bw("z",28):.0f}%"></u></i><b>{esc(latest_evidence.get("z","—"))}</b></div>',
+      f'<div class="why-row"><span>Volume ratio</span><i><u style="width:{bw("vr",42):.0f}%"></u></i><b>{esc(latest_evidence.get("vr","—"))}</b></div>',
+    ])
+    proof_hash=latest.get('proof_hash','—'); forecast_status=latest_resolution.get('outcome') if latest_resolution else 'LOCKED'; latest_asset=latest['asset']
+else:
+    latest_html='<div class="empty-state">NO LOCKED FORECAST YET</div>'; why_html='<div class="empty-state">WAITING FOR A QUALIFIED SIGNAL</div>'; proof_hash='—'; forecast_status='WAITING'; latest_asset='BTCUSDT'
 
-snapshot_json = json.dumps(snapshot, separators=(",", ":")).replace("</", "<\\/")
+chart_asset=core_map.get(latest_asset)
+chart_points=polyline([b['c'] for b in chart_asset.get('bars',[])],100,100,7) if chart_asset and 'error' not in chart_asset else ''
+chart_provider=chart_asset.get('provider','unavailable') if chart_asset else 'unavailable'
 
-page = f'''<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#06101f">
-<title>SEE IT COMING. — Motion Observatory</title>
-<meta name="description" content="Forward-locked market intelligence. From chaos to signal.">
-<!-- SIC-OBSERVATORY-CHAOS-V3.2-MOTION -->
+# ---------- metrics / calibration / recent ----------
+cal=[]
+for lo,hi in [(0.50,.60),(.60,.70),(.70,.80),(.80,.90),(.90,1.01)]:
+    vals=[]
+    for p in predictions:
+        r=resolution_map.get(p['id'])
+        q=float(p['probability'])
+        if r and r.get('outcome') in ('CORRECT','WRONG') and lo<=q<hi:
+            vals.append(1 if r['outcome']=='CORRECT' else 0)
+    obs=sum(vals)/len(vals) if vals else None
+    cal.append((f'{int(lo*100)}–{int(min(1,hi)*100)}%',obs,len(vals)))
+cal_html=''.join(f'<div class="cal-line"><span>{band}</span><div><i style="width:{0 if obs is None else obs*100:.1f}%"></i></div><b>{"waiting" if obs is None else f"{obs*100:.1f}%"}</b><em>N={n}</em></div>' for band,obs,n in reversed(cal))
+recent=''.join(f'<tr><td>{esc(p["id"][-6:])}</td><td>{esc(p["asset"].replace("USDT",""))}</td><td class="{"pos" if p["direction"]=="UP" else "neg"}">{esc(p["direction"])}</td><td>{float(p["probability"])*100:.1f}%</td><td>{esc((resolution_map.get(p["id"]) or {}).get("outcome") or "LOCKED")}</td></tr>' for p in reversed(predictions[-6:]))
+
+snapshot_json=json.dumps(snapshot,separators=(',',':')).replace('</','<\\/')
+
+page=f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#030817"><title>SEE IT COMING. — Market Observatory</title><meta name="description" content="A public forward-locked market intelligence experiment."><!-- SIC-V3.3-DEMO-MATCH-FREEZE -->
 <style>
-:root{{--bg:#030914;--panel:#06152b;--panel2:#071b36;--line:#17508b;--blue:#3f7dff;--cyan:#29e6ff;--violet:#9661ff;--pink:#ff4fa3;--coral:#ff5e7c;--mint:#2ef3bd;--white:#f7fbff;--muted:#8ea8d0}}
-*{{box-sizing:border-box}}html{{scroll-behavior:smooth}}body{{margin:0;background:radial-gradient(circle at 45% 2%,#13295d 0,#071329 27%,#030914 74%);color:var(--white);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow-x:hidden}}
-body:before{{content:"";position:fixed;inset:-50px;pointer-events:none;background-image:linear-gradient(rgba(70,124,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(70,124,255,.035) 1px,transparent 1px);background-size:44px 44px;animation:gridDrift 42s linear infinite}}
-@keyframes gridDrift{{to{{transform:translate3d(44px,44px,0)}}}}
-.shell{{width:min(1500px,calc(100% - 36px));margin:auto;position:relative}}nav{{height:68px;display:flex;align-items:center;gap:34px;border-bottom:1px solid rgba(63,125,255,.28)}}.brand{{font-size:20px;font-weight:950;letter-spacing:-.045em}}.brand i{{font-style:normal;color:var(--pink)}}.navlinks{{display:flex;gap:26px;font-size:10px;color:#9bb0d5}}.navlinks span:first-child{{color:#7eb2ff;text-shadow:0 0 20px #3d7aff}}.navstate{{margin-left:auto;font-size:8px;letter-spacing:.16em;color:#849bc2}}.health{{border:1px solid #397cff;border-radius:8px;padding:7px 10px;color:#70aaff;font-size:8px;font-weight:900;letter-spacing:.08em}}.health.live{{color:var(--mint);border-color:rgba(46,243,189,.45)}}.health.degraded,.health.stale{{color:#ffbc64;border-color:rgba(255,188,100,.5)}}.health.no-data{{color:var(--coral);border-color:rgba(255,94,124,.5)}}
-.hero{{display:grid;grid-template-columns:320px minmax(600px,1fr) 300px;min-height:455px;border-bottom:1px solid rgba(63,125,255,.3)}}.hero-copy{{padding:50px 18px 32px 0;position:relative;z-index:8}}.eyebrow{{display:block;color:#72a9ff;font-size:9px;letter-spacing:.21em;font-weight:900;margin-bottom:18px}}h1{{font-size:68px;line-height:.88;letter-spacing:-.07em;margin:0 0 24px}}h1 span{{background:linear-gradient(95deg,#5b9cff,#9d64ff 54%,#ff5fa2);-webkit-background-clip:text;background-clip:text;color:transparent}}.hero-copy p{{color:#b0c0dd;font-size:16px;line-height:1.5}}.trust{{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:23px;color:#7f97be;font-size:7px;letter-spacing:.12em}}
-.chaos{{position:relative;overflow:hidden;min-height:455px}}#chaosCanvas{{position:absolute;inset:0;width:100%;height:100%;opacity:.9}}.ticker-cloud{{position:absolute;inset:0;pointer-events:none;overflow:hidden}}.ticker-cloud span{{position:absolute;color:rgba(104,148,220,.26);font:700 9px ui-monospace,monospace;letter-spacing:.04em;animation:floatNoise var(--noise-duration,18s) ease-in-out infinite alternate;animation-delay:var(--noise-delay,0s)}}@keyframes floatNoise{{to{{transform:translate3d(var(--noise-x,18px),var(--noise-y,-12px),0);opacity:.75}}}}
-.asset-node{{position:absolute;left:var(--x);top:var(--y);width:174px;transform:translate(-50%,-50%);padding:10px 12px;border:1px solid #28578f;border-radius:10px;background:linear-gradient(145deg,rgba(5,18,41,.95),rgba(7,21,50,.90));box-shadow:0 10px 28px rgba(0,0,0,.3);z-index:6;animation:nodeDrift var(--duration,10s) ease-in-out infinite alternate,nodePulse var(--pulse,3.4s) ease-in-out infinite;animation-delay:var(--delay,0s)}}@keyframes nodeDrift{{to{{transform:translate(calc(-50% + var(--drift,8px)),calc(-50% - var(--drift,8px)))}}}}@keyframes nodePulse{{50%{{box-shadow:0 12px 34px rgba(0,0,0,.35),0 0 calc(12px + var(--drift,8px)) rgba(72,126,255,.18)}}}}.asset-node.gain{{border-color:rgba(46,243,189,.48)}}.asset-node.loss{{border-color:rgba(255,94,124,.55)}}.asset-node.no-data{{opacity:.45}}.node-top,.node-foot{{display:flex;justify-content:space-between;gap:8px;align-items:center}}.node-top b{{font-size:13px}}.node-top span{{font-size:13px;font-weight:900}}.gain .node-top span{{color:var(--mint)}}.loss .node-top span{{color:var(--coral)}}.mini-chart{{width:100%;height:27px;margin:6px 0;overflow:visible}}.mini-chart polyline{{fill:none;stroke:currentColor;stroke-width:2;vector-effect:non-scaling-stroke;stroke-dasharray:160;stroke-dashoffset:160;animation:drawLine 1s ease forwards}}.gain .mini-chart{{color:var(--mint)}}.loss .mini-chart{{color:var(--coral)}}@keyframes drawLine{{to{{stroke-dashoffset:0}}}}.node-foot{{font-size:6px;letter-spacing:.08em;color:#7892bb}}.node-foot em{{font-style:normal;color:#a9bae0}}
-.scan-sweep{{position:absolute;width:55%;height:1px;left:23%;top:52%;background:linear-gradient(90deg,transparent,var(--cyan),var(--violet),transparent);box-shadow:0 0 18px rgba(41,230,255,.75);transform:rotate(-8deg);animation:scanSweep 11s ease-in-out infinite;z-index:4}}@keyframes scanSweep{{0%,100%{{opacity:.15;transform:translateY(-80px) rotate(-8deg)}}50%{{opacity:.9;transform:translateY(90px) rotate(-8deg)}}}}
-.side{{padding:12px 0 12px 14px;display:grid;grid-template-rows:1fr 1fr;gap:10px}}.sidebox,.panel{{border:1px solid #174d83;border-radius:10px;background:linear-gradient(145deg,rgba(6,21,44,.96),rgba(3,12,28,.96));overflow:hidden}}.sidebox h3,.panel-title{{font-size:10px;letter-spacing:.08em;margin:0;padding:12px 14px;border-bottom:1px solid #174574;color:#bfd1ef}}table{{width:100%;border-collapse:collapse}}th,td{{padding:6px 9px;text-align:left;border-bottom:1px solid rgba(37,78,129,.28);font-size:8px}}th{{color:#6d86af;font-size:6px;letter-spacing:.1em}}.pos{{color:var(--mint)}}.neg{{color:var(--coral)}}.snapshot-age{{padding:8px 11px;color:#6e88b2;font-size:7px;border-top:1px solid rgba(37,78,129,.28)}}.stream-viewport{{height:156px;overflow:hidden;position:relative}}.stream-list{{transition:transform .5s cubic-bezier(.2,.8,.2,1)}}.stream-row{{display:grid;grid-template-columns:48px 1fr 1fr 56px;gap:7px;padding:7px 10px;border-bottom:1px solid rgba(37,78,129,.25);font-size:8px}}.stream-row span{{color:#687fa8}}.stream-row em{{font-style:normal;text-align:right}}
-.pipeline{{margin:16px 0 12px;border:1px solid #1758a0;border-radius:10px;background:linear-gradient(90deg,rgba(5,30,64,.9),rgba(7,16,43,.94));display:grid;grid-template-columns:150px repeat(8,1fr);align-items:center;overflow:hidden;position:relative}}.pipeline:before{{content:"";position:absolute;top:0;bottom:0;width:90px;background:linear-gradient(90deg,transparent,rgba(73,146,255,.10),transparent);animation:pipelineGlow 10s linear infinite}}@keyframes pipelineGlow{{from{{left:-100px}}to{{left:100%}}}}.pipe-title{{padding:18px;color:#5fa8ff;font-size:10px;font-weight:900;letter-spacing:.11em}}.step{{padding:14px 4px;text-align:center;position:relative}}.step:after{{content:"→";position:absolute;right:-6px;top:21px;color:#426b9f}}.step:last-child:after{{display:none}}.step i{{display:grid;place-items:center;width:28px;height:28px;margin:auto;border-radius:50%;border:1px solid #557ce7;color:#7ca6ff;box-shadow:0 0 14px rgba(55,112,255,.3);font-style:normal}}.step:nth-child(4) i{{border-color:#a05cff;color:#b77dff}}.step:nth-child(5) i{{border-color:#ff50a1;color:#ff7ab7}}.step:nth-child(7) i{{border-color:#24dfff;color:#24dfff}}.step b{{display:block;font-size:7px;margin-top:7px}}.step span{{font-size:6px;color:#7188ae}}
-.gridtop{{display:grid;grid-template-columns:1.08fr 1.08fr .84fr;gap:10px;margin-bottom:10px}}.forecast-panel{{display:grid;grid-template-columns:1.05fr 1fr;gap:14px;padding:16px;position:relative}}.forecast-panel.fresh{{animation:freshPanel .85s ease both}}@keyframes freshPanel{{0%{{box-shadow:inset 0 0 0 1px rgba(255,79,163,0),0 0 0 rgba(255,79,163,0)}}50%{{box-shadow:inset 0 0 0 1px rgba(255,79,163,.75),0 0 42px rgba(255,79,163,.22)}}100%{{box-shadow:none}}}}.future-line{{display:none;position:absolute;left:14px;right:14px;bottom:10px;text-align:center;color:#ff81bb;font-size:7px;letter-spacing:.14em}}.forecast-panel.fresh .future-line{{display:block;animation:futureReveal 1.2s .25s both}}@keyframes futureReveal{{from{{opacity:0;transform:scaleX(.6)}}to{{opacity:1;transform:none}}}}.forecast-identity{{display:flex;gap:13px;align-items:center}}.coin-emblem{{width:66px;height:66px;border-radius:50%;display:grid;place-items:center;background:radial-gradient(circle,#1d65ff,#101936);border:1px solid #4277d9;font-weight:900;box-shadow:0 0 28px rgba(46,100,255,.3)}}.forecast-identity h3{{font-size:18px;margin:0 0 4px}}.forecast-dir{{font-size:16px;font-weight:900}}.forecast-dir.up{{color:var(--mint)}}.forecast-dir.down{{color:var(--coral)}}.forecast-prob{{font-size:44px;font-weight:950;letter-spacing:-.05em;color:#2df0c0}}.forecast-prob small{{font-size:17px}}.forecast-identity span{{font-size:6px;letter-spacing:.13em;color:#7890b9}}.forecast-facts div{{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid rgba(40,80,130,.27);font-size:8px}}.forecast-facts span{{color:#8299bd}}.whybox{{padding:14px}}.why-row{{display:grid;grid-template-columns:92px 1fr 60px;gap:8px;align-items:center;margin:11px 0;font-size:7px}}.why-row span{{color:#8ba1c5}}.why-row i{{display:block;height:8px;background:#122a4d;border-radius:99px;overflow:hidden}}.why-row u{{display:block;height:100%;background:linear-gradient(90deg,#8e61ff,#24dfff);border-radius:99px;text-decoration:none}}.proofbox{{padding:14px;border-top:1px solid rgba(40,80,130,.25)}}.lockicon{{width:48px;height:48px;border-radius:50%;display:grid;place-items:center;border:1px solid #ff4f9f;color:#ff6bb0;box-shadow:0 0 23px rgba(255,79,159,.25);font-size:19px;margin:5px 0 12px}}.proofbox code{{display:block;font-size:7px;color:#a2b8dd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}.proofstatus{{margin-top:14px;display:flex;justify-content:space-between;font-size:7px}}.proofstatus b{{color:#ff7db4}}.context{{padding:0 14px 14px;display:grid;grid-template-columns:1fr 1fr;gap:6px}}.context div{{border:1px solid rgba(42,83,135,.28);padding:7px;border-radius:7px}}.context span{{display:block;color:#6f87af;font-size:6px}}.context b{{font-size:8px}}.chartbox{{padding:12px}}.chartbox svg{{width:100%;height:125px}}.chartbox polyline{{fill:none;stroke:url(#mainGradient);stroke-width:2.2;vector-effect:non-scaling-stroke;stroke-dasharray:230;stroke-dashoffset:230;animation:drawMain 1.1s ease forwards}}@keyframes drawMain{{to{{stroke-dashoffset:0}}}}
-.time-spine{{display:grid;grid-template-columns:repeat(7,1fr);margin:0 0 12px;border:1px solid #174d83;border-radius:10px;background:rgba(5,18,39,.72);overflow:hidden}}.time-spine div{{padding:10px;text-align:center;border-right:1px solid rgba(42,83,135,.28);position:relative}}.time-spine div:last-child{{border-right:0}}.time-spine span{{display:block;font-size:6px;color:#6d86ae}}.time-spine b{{font-size:8px}}.time-spine .lock{{background:linear-gradient(180deg,rgba(255,79,159,.12),transparent)}}.time-spine .future{{background:linear-gradient(180deg,rgba(65,123,255,.08),transparent)}}
-.gridbottom{{display:grid;grid-template-columns:1.2fr .75fr .78fr;gap:10px;margin-bottom:34px}}.score{{padding:13px}}.score-grid{{display:grid;grid-template-columns:repeat(6,1fr);gap:7px;margin-top:10px}}.score-card{{padding:13px 9px;border:1px solid #173f70;border-radius:8px;background:rgba(5,18,39,.55)}}.score-card b{{font-size:21px}}.score-card span{{display:block;color:#859cc1;font-size:6px;margin-top:5px}}.calibration{{padding:12px}}.cal-line{{display:grid;grid-template-columns:58px 1fr 55px 34px;gap:7px;align-items:center;margin:8px 0;font-size:7px}}.cal-line>div{{height:6px;background:#12284b;border-radius:99px;overflow:hidden}}.cal-line i{{display:block;height:100%;background:linear-gradient(90deg,#4a84ff,#a15fff)}}.cal-line b{{font-size:7px}}.cal-line em{{font-style:normal;color:#7188ae}}.recent table td{{font-size:7px}}footer{{border-top:1px solid rgba(63,125,255,.3);padding:22px 0 36px;display:flex;justify-content:space-between;color:#6d84aa;font-size:7px;letter-spacing:.12em}}
-@media(max-width:1180px){{.hero{{grid-template-columns:300px 1fr}}.side{{grid-column:1/-1;grid-template-columns:1fr 1fr;grid-template-rows:auto}}.gridtop,.gridbottom{{grid-template-columns:1fr}}.pipeline{{grid-template-columns:140px repeat(4,1fr)}}}}
-@media(max-width:760px){{.navlinks{{display:none}}.navstate{{display:none}}.hero{{grid-template-columns:1fr}}.hero-copy{{padding-right:0}}h1{{font-size:58px}}.chaos{{min-height:560px}}.asset-node{{width:150px}}.side{{grid-template-columns:1fr}}.pipeline{{grid-template-columns:1fr 1fr 1fr}}.score-grid{{grid-template-columns:1fr 1fr}}.forecast-panel{{grid-template-columns:1fr}}.time-spine{{grid-template-columns:1fr 1fr 1fr}}}}
-@media(prefers-reduced-motion:reduce){{*,*:before,*:after{{animation:none!important;transition:none!important;scroll-behavior:auto!important}}}}
-</style>
-</head>
-<body>
-<div class="shell">
-<nav>
-  <div class="brand">SEE IT COMING<i>.</i></div>
-  <div class="navlinks"><span>Home</span><span>Live</span><span>Forecasts</span><span>Record</span><span>Method</span><span>About</span></div>
-  <div class="navstate">● PUBLIC FORWARD EXPERIMENT · V1.0</div>
-  <div class="health {initial_status.lower().replace(' ','-')}" id="healthBadge">{initial_status} · {available}/{len(SYMBOLS)}</div>
-</nav>
-<section class="hero">
-  <div class="hero-copy">
-    <span class="eyebrow">THE MOVE HASN'T HAPPENED YET.</span>
-    <h1>See it<br><span>before</span><br>it moves.</h1>
-    <p>Predictions are locked before outcomes. No edits. No deleted losses. Reality keeps the score.</p>
-    <div class="trust"><span>◉ FORWARD ONLY</span><span>◉ PUBLIC PROOF</span><span>◉ NO BACKFILLING</span><span>◉ NO TRADE EXECUTION</span></div>
-  </div>
-  <div class="chaos" id="chaosField">
-    <canvas id="chaosCanvas" aria-hidden="true"></canvas>
-    <div class="scan-sweep" aria-hidden="true"></div>
-    <div class="ticker-cloud" aria-hidden="true">
-      <span style="left:5%;top:24%;--noise-duration:17s;--noise-x:28px;--noise-y:-12px">MARKET NOISE</span>
-      <span style="left:54%;top:8%;--noise-duration:23s;--noise-delay:-6s;--noise-x:-18px;--noise-y:15px">ANOMALY FIELD</span>
-      <span style="left:69%;top:74%;--noise-duration:19s;--noise-delay:-3s;--noise-x:24px;--noise-y:-10px">SIGNAL EXTRACTION</span>
-      <span style="left:22%;top:82%;--noise-duration:21s;--noise-delay:-8s;--noise-x:-16px;--noise-y:-18px">FORWARD ONLY</span>
-    </div>
-    {asset_cards_html}
-  </div>
-  <div class="side">
-    <div class="sidebox"><h3>LIVE MARKET NOISE</h3><table><thead><tr><th>ASSET</th><th>PRICE</th><th>24H</th><th>STATE</th></tr></thead><tbody>{noise_rows_html}</tbody></table><div class="snapshot-age" id="snapshotAge">DATA SNAPSHOT · {generated_at[:16].replace('T',' ')} UTC</div></div>
-    <div class="sidebox"><h3>MARKET OBSERVATION STREAM</h3><div class="stream-viewport"><div class="stream-list" id="streamList">{stream_rows_html}</div></div><div class="snapshot-age">No synthetic trades · snapshot observations only</div></div>
-  </div>
-</section>
-<div class="pipeline"><div class="pipe-title">THE INTELLIGENCE<br>PIPELINE</div><div class="step"><i>◉</i><b>OBSERVE</b><span>Market data</span></div><div class="step"><i>⌁</i><b>DETECT</b><span>Anomalies</span></div><div class="step"><i>△</i><b>PREDICT</b><span>Model ensemble</span></div><div class="step"><i>▣</i><b>LOCK</b><span>Immutable proof</span></div><div class="step"><i>◷</i><b>WAIT</b><span>Market decides</span></div><div class="step"><i>✓</i><b>RESOLVE</b><span>Measure outcome</span></div><div class="step"><i>∑</i><b>SCORE</b><span>Update record</span></div><div class="step"><i>↗</i><b>LEARN</b><span>Next version</span></div></div>
-<div class="gridtop">
-  <div class="panel"><div class="panel-title">LATEST LOCKED FORECAST <span id="freshBadge"></span></div><div class="forecast-panel" id="forecastPanel">{latest_forecast_html}<div class="future-line">THE FUTURE STARTS HERE</div></div></div>
-  <div class="panel"><div class="panel-title">WHY IT FIRED · CURRENT FEATURE SNAPSHOT</div><div class="whybox">{why_html}</div><div class="context">{context_html}</div><div class="proofbox"><div class="lockicon">▣</div><span class="micro">LOCKED PROOF · SHA-256</span><code id="proofHash" data-proof="{esc(proof_hash)}">{esc(proof_hash)}</code><div class="proofstatus"><span>Status</span><b>{esc(forecast_status)}</b></div></div></div>
-  <div class="panel"><div class="panel-title">PRICE CHART · {esc(latest_asset)} · {esc(chart_provider)}</div><div class="chartbox"><svg viewBox="0 0 100 100" preserveAspectRatio="none"><defs><linearGradient id="mainGradient"><stop offset="0%" stop-color="#3d7dff"/><stop offset="100%" stop-color="#a35fff"/></linearGradient></defs><polyline points="{main_chart_points}"/></svg></div></div>
-</div>
-<div class="time-spine"><div><span>OBSERVE</span><b>DATA</b></div><div><span>DETECT</span><b>FEATURES</b></div><div><span>PREDICT</span><b>PROBABILITY</b></div><div class="lock"><span>LOCK</span><b>IMMUTABLE</b></div><div class="future"><span>WAIT</span><b>FUTURE</b></div><div class="future"><span>RESOLVE</span><b>OUTCOME</b></div><div class="future"><span>SCORE</span><b>RECORD</b></div></div>
-<div class="gridbottom">
-  <div class="panel score"><div class="panel-title">SCIENTIFIC SCOREBOARD · PUBLIC FORWARD RECORD</div><div class="score-grid"><div class="score-card"><b>{metrics['locked']}</b><span>LOCKED</span></div><div class="score-card"><b>{metrics['resolved']}</b><span>RESOLVED</span></div><div class="score-card"><b>{metrics['correct']}</b><span>CORRECT</span></div><div class="score-card"><b>{pct(metrics['accuracy']) if metrics['accuracy'] is not None else 'COLLECTING'}</b><span>ACCURACY</span></div><div class="score-card"><b>{decimal(metrics['brier']) if metrics['brier'] is not None else 'PENDING'}</b><span>BRIER SCORE</span></div><div class="score-card"><b>{metrics['edge_status']}</b><span>EDGE STATUS</span></div></div></div>
-  <div class="panel calibration"><div class="panel-title">CALIBRATION LADDER</div>{calibration_html}</div>
-  <div class="panel recent"><div class="panel-title">RECENT PREDICTIONS</div><table><thead><tr><th>#</th><th>ASSET</th><th>DIR</th><th>PROB.</th><th>STATUS</th></tr></thead><tbody>{recent_rows_html}</tbody></table></div>
-</div>
-<footer><span>SEE IT COMING. · FROM CHAOS TO SIGNAL.</span><span>DON'T TRUST THE MODEL. CHECK THE RECORD. · EXPERIMENTAL</span></footer>
-</div>
+:root{{--bg:#030817;--panel:#06132a;--panel2:#081a38;--line:#123c73;--blue:#2d78ff;--cyan:#22e5ff;--violet:#8a57ff;--pink:#ff4a9f;--red:#ff4f73;--mint:#23f2ba;--white:#f7fbff;--muted:#86a0c8}}*{{box-sizing:border-box}}html{{scroll-behavior:smooth}}body{{margin:0;background:radial-gradient(circle at 52% 16%,#102451 0,#071329 33%,#030817 74%);color:var(--white);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow-x:hidden}}body:before{{content:"";position:fixed;inset:0;pointer-events:none;background:linear-gradient(rgba(41,93,165,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(41,93,165,.035) 1px,transparent 1px);background-size:46px 46px}}.shell{{width:min(1540px,calc(100% - 38px));margin:auto;position:relative}}nav{{height:62px;display:flex;align-items:center;gap:34px;border-bottom:1px solid rgba(48,109,197,.32)}}.brand{{font-size:19px;font-weight:950;letter-spacing:-.04em;margin-right:16px}}.brand i{{font-style:normal;color:var(--pink)}}.navlinks{{display:flex;gap:27px;font-size:10px;color:#a9bee1}}.navlinks span:first-child{{color:#6aa8ff;text-shadow:0 0 16px #2b70ff}}.navstate{{margin-left:auto;font-size:8px;letter-spacing:.16em;color:#7f96bd}}.livebadge{{border:1px solid #3c78ff;border-radius:7px;padding:7px 10px;font-size:8px;color:#72a8ff;font-weight:800}}.livebadge.live{{border-color:#20dcb0;color:#48f1c6}}.hero{{display:grid;grid-template-columns:320px 1fr 300px;min-height:430px;border-bottom:1px solid rgba(48,109,197,.26)}}.hero-copy{{padding:46px 18px 28px 0;z-index:5}}.eyebrow{{display:block;color:#74a9ff;font-size:9px;letter-spacing:.21em;font-weight:900;margin-bottom:17px}}h1{{font-size:68px;line-height:.86;letter-spacing:-.065em;margin:0 0 23px}}h1 span{{background:linear-gradient(100deg,#5ba5ff,#9562ff 55%,#ff5aa7);-webkit-background-clip:text;background-clip:text;color:transparent}}.hero-copy p{{color:#b0c0dd;font-size:16px;line-height:1.45;max-width:300px}}.trust{{display:flex;gap:15px;flex-wrap:wrap;margin-top:23px;font-size:7px;letter-spacing:.11em;color:#8aa3ca}}.market-universe{{position:relative;min-height:430px;overflow:hidden;isolation:isolate}}#universeCanvas{{position:absolute;inset:0;width:100%;height:100%;z-index:0}}.market-universe:after{{content:"";position:absolute;inset:0;z-index:1;background:radial-gradient(circle at 50% 50%,rgba(34,229,255,.09),transparent 25%),radial-gradient(circle at 50% 52%,rgba(93,72,255,.16),transparent 42%);pointer-events:none}}.market-card{{position:absolute;z-index:4;padding:10px 12px;border-radius:9px;background:rgba(5,19,43,.88);border:1px solid #21588d;box-shadow:0 8px 28px rgba(0,0,0,.3),0 0 22px rgba(40,111,255,.10);transform:translate(-50%,-50%) scale(var(--scale));animation:cardDrift var(--dur) ease-in-out var(--delay) infinite alternate}}@keyframes cardDrift{{to{{transform:translate(calc(-50% + var(--drift)),calc(-50% - var(--drift)*.55)) scale(var(--scale))}}}}.market-card.gain{{border-color:rgba(35,242,186,.52)}}.market-card.loss{{border-color:rgba(255,79,115,.58)}}.market-card.secondary{{opacity:.77;filter:saturate(.92)}}.mc-head{{display:flex;justify-content:space-between;align-items:center;gap:9px}}.mc-head b{{font-size:12px}}.mc-head strong{{font-size:12px}}.gain .mc-head strong{{color:var(--mint)}}.loss .mc-head strong{{color:var(--red)}}.mc-price{{font-size:7px;color:#738eb9;margin-top:2px}}.market-card svg{{width:100%;height:22px;margin-top:5px}}.market-card polyline{{fill:none;stroke:currentColor;stroke-width:2;vector-effect:non-scaling-stroke}}.market-card.gain{{color:var(--mint)}}.market-card.loss{{color:var(--red)}}.micro-token{{position:absolute;z-index:2;font:800 7px ui-monospace,monospace;opacity:.46;animation:microDrift var(--d) ease-in-out var(--dl) infinite alternate}}.micro-token.pos{{color:#42e8b7}}.micro-token.neg{{color:#ff5d7b}}@keyframes microDrift{{to{{transform:translate(22px,-13px);opacity:.72}}}}.side{{padding:11px 0 11px 12px;display:grid;grid-template-rows:1.06fr .94fr;gap:9px}}.sidebox,.panel{{border:1px solid #12477e;border-radius:8px;background:linear-gradient(145deg,rgba(6,20,43,.96),rgba(3,12,27,.96));overflow:hidden}}.sidebox h3,.panel-title{{font-size:10px;letter-spacing:.08em;margin:0;padding:11px 13px;border-bottom:1px solid #123b69;color:#bfd1ef}}table{{width:100%;border-collapse:collapse}}th,td{{padding:5px 8px;text-align:left;border-bottom:1px solid rgba(30,75,128,.27);font-size:8px}}th{{font-size:6px;color:#6f88b3;letter-spacing:.11em}}.pos{{color:var(--mint)}}.neg{{color:var(--red)}}.trend-dot{{display:block;width:38px;height:2px;background:currentColor;box-shadow:0 0 9px currentColor}}.tape-window{{height:160px;overflow:hidden;position:relative}}.tape-list{{animation:tapeScroll 22s linear infinite}}@keyframes tapeScroll{{to{{transform:translateY(-50%)}}}}.tape-row{{display:grid;grid-template-columns:54px 1fr 1fr 54px;gap:7px;padding:6px 9px;border-bottom:1px solid rgba(30,75,128,.22);font-size:8px}}.tape-row span{{color:#607ca9}}.tape-row em{{font-style:normal;text-align:right}}.side-note{{padding:7px 9px;color:#5f789f;font-size:6px}}.pipeline{{margin:14px 0 10px;border:1px solid #17559b;border-radius:9px;background:linear-gradient(90deg,rgba(4,28,62,.92),rgba(6,17,42,.94));display:grid;grid-template-columns:150px repeat(8,1fr);align-items:center;overflow:hidden}}.pipe-title{{padding:16px;color:#5ba2ff;font-size:10px;font-weight:900;letter-spacing:.12em}}.step{{padding:13px 5px;text-align:center;position:relative}}.step:after{{content:"→";position:absolute;right:-5px;top:20px;color:#426da8}}.step:last-child:after{{display:none}}.step i{{display:grid;place-items:center;width:27px;height:27px;margin:auto;border-radius:50%;border:1px solid #527cf0;color:#79a6ff;box-shadow:0 0 15px rgba(55,112,255,.35)}}.step:nth-child(4) i{{border-color:#a357ff;color:#b983ff}}.step:nth-child(5) i{{border-color:#ff4a9f;color:#ff75b2}}.step:nth-child(7) i{{border-color:#22e5ff;color:#22e5ff}}.step b{{display:block;font-size:7px;margin-top:7px}}.step span{{font-size:6px;color:#7087ad}}.gridtop{{display:grid;grid-template-columns:1.15fr 1.18fr .84fr;gap:9px;margin-bottom:9px}}.forecast-panel{{display:grid;grid-template-columns:1.08fr 1fr;gap:15px;padding:16px}}.forecast-identity{{display:flex;gap:13px;align-items:center}}.coin-emblem{{width:67px;height:67px;border-radius:50%;display:grid;place-items:center;background:radial-gradient(circle,#1d63ff,#101a36);border:1px solid #3977dd;font-weight:900}}.forecast-identity h3{{font-size:17px;margin:0 0 4px}}.forecast-dir{{font-size:15px;font-weight:900}}.forecast-dir.up{{color:var(--mint)}}.forecast-dir.down{{color:var(--red)}}.forecast-prob{{font-size:43px;font-weight:950;letter-spacing:-.05em;color:#31efc2}}.forecast-prob small{{font-size:16px}}.forecast-identity span{{font-size:6px;letter-spacing:.12em;color:#7890b8}}.forecast-facts div{{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid rgba(39,78,128,.25);font-size:8px}}.forecast-facts span{{color:#8299bf}}.whybox{{padding:13px}}.why-row{{display:grid;grid-template-columns:92px 1fr 57px;gap:8px;align-items:center;margin:10px 0;font-size:7px}}.why-row span{{color:#8da2c5}}.why-row i{{height:8px;background:#10284e;border-radius:99px;overflow:hidden}}.why-row u{{display:block;height:100%;background:linear-gradient(90deg,#8e57ff,#25dcff);border-radius:99px;text-decoration:none}}.why-row b{{font-size:7px}}.proofbox{{display:grid;grid-template-columns:48px 1fr;gap:10px;padding:12px;border-top:1px solid rgba(30,75,128,.25)}}.lockicon{{width:45px;height:45px;border-radius:50%;display:grid;place-items:center;border:1px solid #ff4a9f;color:#ff68ad;box-shadow:0 0 22px rgba(255,74,159,.25)}}.proofbox code{{display:block;font-size:7px;color:#a3b8dc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}.proofstatus{{font-size:7px;margin-top:6px}}.chartbox{{padding:11px}}.chartbox svg{{width:100%;height:122px}}.chartbox polyline{{fill:none;stroke:url(#grad);stroke-width:2.2;vector-effect:non-scaling-stroke;stroke-dasharray:240;stroke-dashoffset:240;animation:draw 1.1s ease forwards}}@keyframes draw{{to{{stroke-dashoffset:0}}}}.gridbottom{{display:grid;grid-template-columns:1.32fr .58fr .67fr;gap:9px;margin-bottom:30px}}.score{{padding:12px}}.score-grid{{display:grid;grid-template-columns:repeat(6,1fr);gap:7px;margin-top:9px}}.score-card{{padding:12px 8px;border:1px solid #173f70;border-radius:7px;background:rgba(5,18,39,.55)}}.score-card b{{font-size:20px}}.score-card span{{display:block;color:#849bc0;font-size:6px;margin-top:5px}}.calibration{{padding:10px}}.cal-line{{display:grid;grid-template-columns:55px 1fr 52px 32px;gap:6px;align-items:center;margin:7px 0;font-size:6px}}.cal-line>div{{height:6px;background:#11274b;border-radius:99px;overflow:hidden}}.cal-line i{{display:block;height:100%;background:linear-gradient(90deg,#4b85ff,#a35cff)}}.cal-line em{{font-style:normal;color:#7187ad}}.recent td{{font-size:7px}}footer{{border-top:1px solid rgba(53,109,190,.28);padding:21px 0 34px;display:flex;justify-content:space-between;color:#6c83a9;font-size:7px;letter-spacing:.12em}}.empty-state{{padding:28px;color:#7d93b8}}
+@media(max-width:1180px){{.hero{{grid-template-columns:295px 1fr}}.side{{grid-column:1/-1;grid-template-columns:1fr 1fr;grid-template-rows:auto}}.gridtop,.gridbottom{{grid-template-columns:1fr}}.pipeline{{grid-template-columns:140px repeat(4,1fr)}}}}@media(max-width:760px){{.navlinks,.navstate{{display:none}}.hero{{grid-template-columns:1fr}}.hero-copy{{padding-right:0}}h1{{font-size:58px}}.market-universe{{min-height:620px}}.side{{grid-template-columns:1fr}}.pipeline{{grid-template-columns:1fr 1fr 1fr}}.score-grid{{grid-template-columns:1fr 1fr}}.forecast-panel{{grid-template-columns:1fr}}}}@media(prefers-reduced-motion:reduce){{*,*:before,*:after{{animation:none!important;transition:none!important;scroll-behavior:auto!important}}}}
+</style></head><body><div class="shell">
+<nav><div class="brand">SEE IT COMING<i>.</i></div><div class="navlinks"><span>Home</span><span>Live</span><span>Forecasts</span><span>Record</span><span>Method</span><span>About</span></div><div class="navstate">● PUBLIC FORWARD EXPERIMENT · V1.0</div><div class="livebadge {market_status.lower().replace(' ','-')}" id="healthBadge">{market_status} · {len(universe)} MARKET</div></nav>
+<section class="hero"><div class="hero-copy"><span class="eyebrow">THE MOVE HASN'T HAPPENED YET.</span><h1>See it<br><span>before</span><br>it moves.</h1><p>Predictions are locked before outcomes. No edits. No deleted losses. Reality keeps the score.</p><div class="trust"><span>◉ FORWARD ONLY</span><span>◉ PUBLIC PROOF</span><span>◉ NO BACKFILLING</span><span>◉ NO TRADE EXECUTION</span></div></div>
+<div class="market-universe" id="marketUniverse"><canvas id="universeCanvas"></canvas>{micro_html}{hero_cards_html}</div>
+<div class="side"><div class="sidebox"><h3>LIVE MARKET UNIVERSE</h3><table><thead><tr><th>ASSET</th><th>PRICE</th><th>24H</th><th>TREND</th></tr></thead><tbody>{market_rows}</tbody></table><div class="side-note">{esc(universe_source)} · {len(universe)} REAL MARKET ASSETS</div></div><div class="sidebox"><h3>MARKET OBSERVATION TAPE</h3><div class="tape-window"><div class="tape-list">{tape_rows}{tape_rows}</div></div><div class="side-note">SNAPSHOT DATA · NO SYNTHETIC TRADES</div></div></div></section>
+<div class="pipeline"><div class="pipe-title">THE INTELLIGENCE<br>PIPELINE</div><div class="step"><i>◉</i><b>OBSERVE</b><span>Market universe</span></div><div class="step"><i>⌁</i><b>DETECT</b><span>Anomalies</span></div><div class="step"><i>△</i><b>PREDICT</b><span>Model ensemble</span></div><div class="step"><i>▣</i><b>LOCK</b><span>Immutable proof</span></div><div class="step"><i>◷</i><b>WAIT</b><span>Market decides</span></div><div class="step"><i>✓</i><b>RESOLVE</b><span>Measure outcome</span></div><div class="step"><i>∑</i><b>SCORE</b><span>Update record</span></div><div class="step"><i>↗</i><b>LEARN</b><span>Next version</span></div></div>
+<div class="gridtop"><div class="panel"><div class="panel-title">LATEST LOCKED FORECAST</div><div class="forecast-panel">{latest_html}</div></div><div class="panel"><div class="panel-title">WHY IT FIRED</div><div class="whybox">{why_html}</div><div class="proofbox"><div class="lockicon">▣</div><div><span class="eyebrow" style="margin:0 0 5px">LOCKED PROOF · SHA-256</span><code>{esc(proof_hash)}</code><div class="proofstatus">STATUS · <b>{esc(forecast_status)}</b></div></div></div></div><div class="panel"><div class="panel-title">PRICE CHART · {esc(latest_asset.replace('USDT',''))} · {esc(chart_provider)}</div><div class="chartbox"><svg viewBox="0 0 100 100" preserveAspectRatio="none"><defs><linearGradient id="grad"><stop offset="0%" stop-color="#2d78ff"/><stop offset="100%" stop-color="#ae5cff"/></linearGradient></defs><polyline points="{chart_points}"/></svg></div></div></div>
+<div class="gridbottom"><div class="panel score"><div class="panel-title">SCIENTIFIC SCOREBOARD · PUBLIC FORWARD RECORD</div><div class="score-grid"><div class="score-card"><b>{metrics['locked']}</b><span>LOCKED</span></div><div class="score-card"><b>{metrics['resolved']}</b><span>RESOLVED</span></div><div class="score-card"><b>{metrics['correct']}</b><span>CORRECT</span></div><div class="score-card"><b>{pct(metrics['accuracy']) if metrics['accuracy'] is not None else 'COLLECTING'}</b><span>ACCURACY</span></div><div class="score-card"><b>{dec(metrics['brier']) if metrics['brier'] is not None else 'PENDING'}</b><span>BRIER SCORE</span></div><div class="score-card"><b>{metrics['edge_status']}</b><span>EDGE STATUS</span></div></div></div><div class="panel calibration"><div class="panel-title">CALIBRATION</div>{cal_html}</div><div class="panel recent"><div class="panel-title">RECENT PREDICTIONS</div><table><thead><tr><th>#</th><th>ASSET</th><th>DIR</th><th>PROB.</th><th>STATUS</th></tr></thead><tbody>{recent}</tbody></table></div></div>
+<footer><span>SEE IT COMING. · FROM CHAOS TO SIGNAL.</span><span>DON'T TRUST THE MODEL. CHECK THE RECORD. · EXPERIMENTAL</span></footer></div>
 <script id="snapshot-data" type="application/json">{snapshot_json}</script>
 <script>
-(() => {{
-  const snapshot = JSON.parse(document.getElementById('snapshot-data').textContent);
-  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const healthBadge = document.getElementById('healthBadge');
-  const snapshotAge = document.getElementById('snapshotAge');
-  const generated = new Date(snapshot.generated_at);
-  function updateHealth() {{
-    const age = Math.max(0, (Date.now() - generated.getTime()) / 60000);
-    let state = snapshot.system_status_at_build;
-    if (snapshot.available_assets === 0) state = 'NO DATA';
-    else if (age > snapshot.stale_after_minutes) state = 'STALE';
-    else if (snapshot.available_assets < snapshot.total_assets) state = 'DEGRADED';
-    else state = 'LIVE';
-    healthBadge.className = 'health ' + state.toLowerCase().replaceAll(' ','-');
-    healthBadge.textContent = state + ' · ' + snapshot.available_assets + '/' + snapshot.total_assets;
-    snapshotAge.textContent = 'DATA SNAPSHOT · ' + generated.toISOString().slice(0,16).replace('T',' ') + ' UTC · ' + Math.round(age) + 'm old';
-  }}
-  updateHealth(); setInterval(updateHealth, 30000);
+(()=>{{const snap=JSON.parse(document.getElementById('snapshot-data').textContent);const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;const canvas=document.getElementById('universeCanvas');const box=document.getElementById('marketUniverse');const ctx=canvas.getContext('2d');let raf=0,particles=[];function resize(){{const d=Math.min(devicePixelRatio||1,2);canvas.width=box.clientWidth*d;canvas.height=box.clientHeight*d;ctx.setTransform(d,0,0,d,0,0);particles=Array.from({{length:70}},(_,i)=>({{a:Math.random()*Math.PI*2,r:.15+Math.random()*.36,s:.0008+Math.random()*.002,x:Math.random(),y:Math.random()}}));}}function draw(t){{const w=box.clientWidth,h=box.clientHeight;ctx.clearRect(0,0,w,h);const cx=w*.5,cy=h*.53,rx=Math.min(w*.30,280),ry=rx*.58;ctx.save();ctx.globalCompositeOperation='lighter';for(let k=0;k<7;k++){{ctx.beginPath();ctx.strokeStyle=`rgba(${{k%2?'130,83,255':'32,218,255'}},${{.11+k*.018}})`;ctx.lineWidth=.8;ctx.ellipse(cx,cy,rx*(.65+k*.055),ry*(.65+k*.045),k*.28+t*.00003*(k%2?1:-1),0,Math.PI*2);ctx.stroke();}}for(let i=0;i<particles.length;i++){{const p=particles[i],a=p.a+t*p.s;const x=cx+Math.cos(a)*rx*p.r*2.2,y=cy+Math.sin(a*1.3)*ry*p.r*2.0;ctx.fillStyle=i%7===0?'rgba(255,70,151,.75)':'rgba(47,154,255,.55)';ctx.beginPath();ctx.arc(x,y,i%7===0?1.5:1,0,Math.PI*2);ctx.fill();if(i>0&&i%3===0){{const q=particles[i-1],aq=q.a+t*q.s,qx=cx+Math.cos(aq)*rx*q.r*2.2,qy=cy+Math.sin(aq*1.3)*ry*q.r*2;ctx.strokeStyle='rgba(63,120,255,.11)';ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(qx,qy);ctx.stroke();}}}}// decorative candle texture: intentionally unlabeled and non-numeric
+for(let i=0;i<48;i++){{const x=(i/48)*w,y=h*.23+Math.sin(i*.9+t*.0004)*35+((i*17)%53);const up=(i%3)!==0;ctx.strokeStyle=up?'rgba(35,242,186,.15)':'rgba(255,79,115,.15)';ctx.beginPath();ctx.moveTo(x,y-9);ctx.lineTo(x,y+10);ctx.stroke();ctx.fillStyle=ctx.strokeStyle;ctx.fillRect(x-2,y-4,4,8);}}ctx.restore();if(!reduce&&!document.hidden)raf=requestAnimationFrame(draw);}}document.addEventListener('visibilitychange',()=>{{cancelAnimationFrame(raf);if(!document.hidden&&!reduce)raf=requestAnimationFrame(draw);}});addEventListener('resize',resize);resize();if(!reduce)raf=requestAnimationFrame(draw);const gen=new Date(snap.freshness_anchor||snap.generated_at);const badge=document.getElementById('healthBadge');function health(){{const age=(Date.now()-gen.getTime())/60000;let s=snap.system_status_at_build;if(age>snap.stale_after_minutes&&s!=='NO DATA')s='STALE';badge.textContent=s+' · '+snap.universe_count+' MARKET';badge.className='livebadge '+s.toLowerCase().replaceAll(' ','-');}}health();setInterval(health,30000);}})();
+</script></body></html>'''
 
-  const latest = snapshot.latest_forecast;
-  const resolution = snapshot.latest_resolution;
-  if (latest && !resolution) {{
-    const age = Math.max(0, (Date.now() - new Date(latest.created_at).getTime()) / 60000);
-    const panel = document.getElementById('forecastPanel');
-    const badge = document.getElementById('freshBadge');
-    const proof = document.getElementById('proofHash');
-    if (age < 15) {{
-      panel.classList.add('fresh'); badge.textContent = ' · FORECAST LOCKED';
-      if (!reduce && proof && proof.dataset.proof) {{
-        const full = proof.dataset.proof; let i = 2; proof.textContent = '';
-        const timer = setInterval(() => {{ proof.textContent = full.slice(0, i); i += 2; if (i > full.length) {{ proof.textContent = full; clearInterval(timer); }} }}, 35);
-      }}
-    }} else if (age < 60) badge.textContent = ' · NEWLY LOCKED';
-  }}
+(OUT/'index.html').write_text(page)
+print('Built V3.3 DEMO MATCH:', OUT/'index.html', '| universe:', len(universe), universe_source, '| core:', available_core, '/', len(CORE))
 
-  const stream = document.getElementById('streamList');
-  let streamIndex = 0, streamTimer = null;
-  function runStream() {{
-    if (reduce || document.hidden || !stream) return;
-    const rows = [...stream.querySelectorAll('[data-stream-row]')];
-    if (rows.length < 2) return;
-    streamIndex = (streamIndex + 1) % rows.length;
-    stream.style.transform = `translateY(${{-streamIndex * rows[0].offsetHeight}}px)`;
-  }}
-  if (!reduce) streamTimer = setInterval(runStream, 1900);
-
-  const canvas = document.getElementById('chaosCanvas');
-  const ctx = canvas.getContext('2d');
-  let animationId = null, running = !reduce;
-  const particles = Array.from({{length:44}}, (_, i) => ({{
-    a:(i*0.61803398875)%1*Math.PI*2,
-    r:0.18+((i*37)%61)/100,
-    s:0.0006+((i*17)%9)/9000,
-    z:0.35+((i*23)%65)/100
-  }}));
-  function resize() {{
-    const rect = canvas.getBoundingClientRect();
-    const dpr = Math.min(devicePixelRatio || 1, 2);
-    canvas.width = Math.max(1, Math.round(rect.width*dpr)); canvas.height = Math.max(1, Math.round(rect.height*dpr));
-    ctx.setTransform(dpr,0,0,dpr,0,0);
-  }}
-  function draw(t=0) {{
-    if (!running) return;
-    const w=canvas.clientWidth,h=canvas.clientHeight,cx=w*.5,cy=h*.52,rx=w*.34,ry=h*.31;
-    ctx.clearRect(0,0,w,h);
-    const glow=ctx.createRadialGradient(cx,cy,10,cx,cy,Math.max(rx,ry)); glow.addColorStop(0,'rgba(44,96,255,.24)'); glow.addColorStop(.55,'rgba(76,48,180,.09)'); glow.addColorStop(1,'rgba(0,0,0,0)'); ctx.fillStyle=glow;ctx.fillRect(0,0,w,h);
-    ctx.lineWidth=1;
-    for(let ring=0; ring<4; ring++) {{
-      ctx.beginPath(); ctx.strokeStyle=`rgba(${{40+ring*20}},${{130+ring*10}},255,${{.12+ring*.035}})`;
-      ctx.ellipse(cx,cy,rx*(.58+ring*.12),ry*(.58+ring*.12),(-.22+ring*.11)+(t/90000)*(ring%2?1:-1),0,Math.PI*2); ctx.stroke();
-    }}
-    const pts=[];
-    particles.forEach((p,i)=>{{
-      const a=p.a+t*p.s; const x=cx+Math.cos(a)*rx*p.r; const y=cy+Math.sin(a*1.17)*ry*p.r*.84;
-      pts.push([x,y,p.z]); ctx.beginPath(); ctx.fillStyle=i%9===0?'rgba(255,82,157,.62)':i%5===0?'rgba(41,230,255,.68)':'rgba(83,128,255,.48)'; ctx.arc(x,y,1+p.z*1.2,0,Math.PI*2);ctx.fill();
-    }});
-    for(let i=0;i<pts.length;i++) for(let j=i+1;j<pts.length;j++) {{ const dx=pts[i][0]-pts[j][0],dy=pts[i][1]-pts[j][1],d=Math.hypot(dx,dy); if(d<82) {{ctx.strokeStyle=`rgba(70,135,255,${{(1-d/82)*.11}})`;ctx.beginPath();ctx.moveTo(pts[i][0],pts[i][1]);ctx.lineTo(pts[j][0],pts[j][1]);ctx.stroke();}} }}
-    animationId=requestAnimationFrame(draw);
-  }}
-  resize(); addEventListener('resize', resize); if (running) animationId=requestAnimationFrame(draw);
-  document.addEventListener('visibilitychange',()=>{{
-    running = !reduce && !document.hidden;
-    if (running && !animationId) animationId=requestAnimationFrame(draw);
-    if (!running && animationId) {{cancelAnimationFrame(animationId);animationId=null;}}
-  }});
-}})();
-</script>
-</body>
-</html>'''
-
-(OUT / "index.html").write_text(page)
-(OUT / "ledger.json").write_text(json.dumps(ledger, indent=2))
-(OUT / "snapshot.json").write_text(json.dumps(snapshot, indent=2))
-print("Built OBSERVATORY CHAOS V3.2 MOTION:", OUT / "index.html", "| market:", initial_status, f"{available}/{len(SYMBOLS)}")

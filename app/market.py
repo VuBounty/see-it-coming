@@ -125,3 +125,84 @@ def scan(symbols):
         except Exception as exc:
             out.append({"symbol": symbol, "error": str(exc), "source": "unavailable"})
     return sorted(out, key=lambda row: row.get("anomaly", -1), reverse=True)
+
+
+def _coingecko_universe(limit=100):
+    query = urllib.parse.urlencode({
+        "vs_currency": "usd",
+        "order": "market_cap_desc",
+        "per_page": int(limit),
+        "page": 1,
+        "sparkline": "true",
+        "price_change_percentage": "24h",
+    })
+    raw = _json("https://api.coingecko.com/api/v3/coins/markets?" + query, timeout=10)
+    out = []
+    for row in raw:
+        price = row.get("current_price")
+        if price is None:
+            continue
+        spark = (((row.get("sparkline_in_7d") or {}).get("price")) or [])[-48:]
+        out.append({
+            "id": str(row.get("id") or ""),
+            "symbol": str(row.get("symbol") or "").upper(),
+            "name": str(row.get("name") or ""),
+            "price": float(price),
+            "change_24h": float(row.get("price_change_percentage_24h") or 0.0),
+            "market_cap_rank": row.get("market_cap_rank"),
+            "market_cap": row.get("market_cap"),
+            "volume_24h": row.get("total_volume"),
+            "sparkline": [float(x) for x in spark if x is not None],
+            "source": "CoinGecko",
+        })
+    if len(out) < min(20, int(limit)):
+        raise ValueError("CoinGecko returned insufficient universe rows")
+    return out[:int(limit)]
+
+
+def _cryptocompare_universe(limit=100):
+    query = urllib.parse.urlencode({"limit": int(limit)-1, "tsym": "USD"})
+    raw = _json("https://min-api.cryptocompare.com/data/top/mktcapfull?" + query, timeout=10)
+    rows = raw.get("Data") or []
+    out = []
+    for item in rows:
+        coin = item.get("CoinInfo") or {}
+        display = (item.get("DISPLAY") or {}).get("USD") or {}
+        rawusd = (item.get("RAW") or {}).get("USD") or {}
+        price = rawusd.get("PRICE")
+        if price is None:
+            continue
+        out.append({
+            "id": str(coin.get("Name") or ""),
+            "symbol": str(coin.get("Name") or "").upper(),
+            "name": str(coin.get("FullName") or coin.get("Name") or ""),
+            "price": float(price),
+            "change_24h": float(rawusd.get("CHANGEPCT24HOUR") or 0.0),
+            "market_cap_rank": None,
+            "market_cap": rawusd.get("MKTCAP"),
+            "volume_24h": rawusd.get("TOTALVOLUME24HTO"),
+            "sparkline": [],
+            "source": "CryptoCompare",
+        })
+    if len(out) < min(20, int(limit)):
+        raise ValueError("CryptoCompare returned insufficient universe rows")
+    return out[:int(limit)]
+
+
+def market_universe(limit=100):
+    """Return a broad real-market universe for the visual chaos layer.
+
+    This is intentionally independent from the prediction asset list. It never
+    invents prices or percentage changes. If all providers fail, it raises so
+    callers can render an explicit degraded/no-data state.
+    """
+    errors = []
+    for provider in (_coingecko_universe, _cryptocompare_universe):
+        try:
+            rows = provider(limit)
+            if rows:
+                return rows, rows[0].get("source", provider.__name__)
+        except Exception as exc:
+            errors.append("%s: %s" % (provider.__name__.lstrip("_"), exc))
+    raise RuntimeError("all universe providers unavailable | " + " | ".join(errors))
+

@@ -5,11 +5,11 @@ on:
     branches: ["main"]
     paths:
       - "data/ledger.json"
-      - "site/**"
       - "app/market.py"
       - "app/presentation.py"
       - "scripts/build_pages.py"
-      - "scripts/check_v32.py"
+      - "scripts/check_v33.py"
+      - "site/universe.json"
       - ".github/workflows/pages.yml"
 permissions:
   contents: read
@@ -30,7 +30,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python scripts/build_pages.py
-      - run: python scripts/check_v32.py
+      - run: python scripts/check_v33.py
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:
@@ -38,3 +38,4 @@ jobs:
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4
+
