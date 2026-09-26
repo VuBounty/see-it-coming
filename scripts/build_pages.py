@@ -1,182 +1,305 @@
-import json, html
+import sys, json, html
 from pathlib import Path
 
-ledger_path = Path("data/ledger.json")
-data = json.loads(ledger_path.read_text()) if ledger_path.exists() else {"predictions": [], "resolutions": []}
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from app.market import scan, klines_with_source
+
+LEDGER = ROOT / "data" / "ledger.json"
+OUT = ROOT / "site"
+OUT.mkdir(exist_ok=True)
+
+data = json.loads(LEDGER.read_text()) if LEDGER.exists() else {"predictions": [], "resolutions": []}
 preds = data.get("predictions", [])
 ress = data.get("resolutions", [])
 resmap = {r["prediction_id"]: r for r in ress}
+SYMBOLS = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","DOGEUSDT"]
 
-def e(v): return html.escape(str(v))
+def esc(v):
+    return html.escape(str(v))
+
 def evmap(p):
-    out={}
-    for x in p.get("evidence",[]):
-        if "=" in x:
-            k,v=x.split("=",1); out[k]=v
+    out = {}
+    for item in p.get("evidence", []):
+        if "=" in item:
+            k, v = item.split("=", 1)
+            out[k] = v
     return out
 
-scored=[]
-for p in preds:
-    r=resmap.get(p["id"])
-    if r and r.get("outcome") in ("CORRECT","WRONG"):
-        scored.append((float(p["probability"]),1 if r["outcome"]=="CORRECT" else 0))
+try:
+    radar = scan(SYMBOLS)
+except Exception as ex:
+    radar = [{"symbol": s, "error": str(ex), "source": "unavailable"} for s in SYMBOLS]
 
-n=len(scored)
-correct=sum(a for _,a in scored)
-accuracy=(correct/n) if n else None
-brier=(sum((p-a)**2 for p,a in scored)/n) if n else None
+valid = [x for x in radar if "error" not in x]
+valid_map = {x["symbol"]: x for x in valid}
+data_health = f"{len(valid)}/{len(SYMBOLS)}"
+system_state = "LIVE" if len(valid) == len(SYMBOLS) else ("DEGRADED" if valid else "NO DATA")
+
+scored = []
+for p in preds:
+    r = resmap.get(p["id"])
+    if r and r.get("outcome") in ("CORRECT", "WRONG"):
+        scored.append((float(p["probability"]), 1 if r["outcome"] == "CORRECT" else 0))
+
+n_res = len(scored)
+correct = sum(a for _, a in scored)
+accuracy = correct / n_res if n_res else None
+brier = sum((q-a)**2 for q, a in scored) / n_res if n_res else None
 
 def pct(x):
     return "—" if x is None else f"{x*100:.1f}%"
+
 def dec(x):
     return "—" if x is None else f"{x:.3f}"
 
-cards=[]
-for p in reversed(preds[-12:]):
-    r=resmap.get(p["id"])
-    ev=evmap(p)
-    state=(r.get("outcome") if r else "LOCKED")
-    state_cls="ok" if state=="CORRECT" else ("bad" if state=="WRONG" else "lock")
-    direction=p.get("direction","—")
-    arrow="↑" if direction=="UP" else "↓"
-    cards.append(f'''
-    <article class="forecast-card">
-      <div class="fc-top">
-        <div><span class="label">FORECAST OBJECT</span><h3>{e(p.get("asset","—"))}</h3></div>
-        <span class="state {state_cls}">{e(state)}</span>
-      </div>
-      <div class="fc-main">
-        <div>
-          <div class="dir {'up' if direction=='UP' else 'down'}">{arrow} {e(direction)}</div>
-          <div class="prob">{float(p.get("probability",0))*100:.1f}<small>%</small></div>
-          <span class="micro">MODEL PROBABILITY</span>
-        </div>
-        <div class="facts">
-          <div><span>ENTRY</span><b>{e(ev.get("entry","—"))}</b></div>
-          <div><span>TARGET</span><b>{e(p.get("target_pct","—"))}%</b></div>
-          <div><span>HORIZON</span><b>{e(p.get("horizon_hours","—"))}H</b></div>
-          <div><span>CREATED</span><b>{e(p.get("created_at","—"))[:19]}</b></div>
-        </div>
-      </div>
-      <div class="why">
-        <span class="label">WHY IT FIRED</span>
-        <div class="whygrid">
-          <div><span>r6</span><b>{e(ev.get("r6","—"))}</b></div>
-          <div><span>r24</span><b>{e(ev.get("r24","—"))}</b></div>
-          <div><span>z-score</span><b>{e(ev.get("z","—"))}</b></div>
-          <div><span>volume ratio</span><b>{e(ev.get("vr","—"))}</b></div>
-        </div>
-      </div>
-      <div class="proof">
-        <span>SHA-256 PROOF</span>
-        <code>{e(p.get("proof_hash","—"))}</code>
-      </div>
-    </article>
-    ''')
-cards_html="".join(cards) if cards else '<div class="empty">NO LOCKED FORECASTS YET.</div>'
+latest = preds[-1] if preds else None
+latest_ev = evmap(latest) if latest else {}
+latest_res = resmap.get(latest["id"]) if latest else None
 
-bins=[(0.50,0.60),(0.60,0.70),(0.70,0.80),(0.80,0.90),(0.90,1.01)]
-cal=[]
-for lo,hi in bins:
-    vals=[(p,a) for p,a in scored if lo<=p<hi]
-    if vals:
-        observed=sum(a for _,a in vals)/len(vals)
-        cal.append((f"{int(lo*100)}–{int(min(1,hi)*100)}%",observed,len(vals)))
+positions = [(8,12),(37,5),(68,13),(12,59),(42,69),(70,59)]
+chips = []
+for i, s in enumerate(SYMBOLS):
+    x = valid_map.get(s)
+    left, top = positions[i]
+    if x:
+        mv = x.get("r24", 0) * 100
+        cls = "gain" if mv >= 0 else "loss"
+        arrow = "↑" if mv >= 0 else "↓"
+        chips.append(f'''
+        <div class="coin-chip {cls}" style="left:{left}%;top:{top}%">
+          <div class="coin-row"><b>{esc(s.replace("USDT",""))}</b><span>{arrow} {mv:+.2f}%</span></div>
+          <svg viewBox="0 0 100 24" preserveAspectRatio="none">
+            <polyline points="0,16 10,13 20,18 30,10 40,12 50,7 60,11 70,5 80,9 90,4 100,6"/>
+          </svg>
+        </div>''')
     else:
-        cal.append((f"{int(lo*100)}–{int(min(1,hi)*100)}%",None,0))
-cal_html=""
-for band,obs,count in cal:
-    width=0 if obs is None else obs*100
-    cal_html+=f'''
-    <div class="cal-row">
-      <span>{band}</span>
-      <div class="track"><i style="width:{width:.1f}%"></i></div>
-      <b>{"—" if obs is None else f"{obs*100:.1f}%"}</b>
-      <small>N={count}</small>
-    </div>'''
+        chips.append(f'''
+        <div class="coin-chip stale" style="left:{left}%;top:{top}%">
+          <div class="coin-row"><b>{esc(s.replace("USDT",""))}</b><span>NO DATA</span></div>
+        </div>''')
+chips_html = "".join(chips)
 
-page=f'''<!doctype html>
+noise_rows = []
+for s in SYMBOLS:
+    x = valid_map.get(s)
+    if x:
+        mv = x.get("r24", 0) * 100
+        cls = "pos" if mv >= 0 else "neg"
+        noise_rows.append(
+            f"<tr><td>{esc(s.replace('USDT',''))}</td><td>{x['price']:.8g}</td>"
+            f"<td class='{cls}'>{mv:+.2f}%</td><td>{esc(x.get('source',''))}</td></tr>"
+        )
+    else:
+        noise_rows.append(f"<tr><td>{esc(s.replace('USDT',''))}</td><td>—</td><td>—</td><td>unavailable</td></tr>")
+noise_html = "".join(noise_rows)
+
+tape = []
+for x in valid[:6]:
+    cls = "pos" if x.get("r24", 0) >= 0 else "neg"
+    tape.append(
+        f"<div class='tape-row'><span class='t-time'>NOW</span><b>{esc(x['symbol'].replace('USDT',''))}</b>"
+        f"<span>{x['price']:.8g}</span><em class='{cls}'>{x.get('r24',0)*100:+.2f}%</em></div>"
+    )
+tape_html = "".join(tape) if tape else "<div class='tape-row'><span>—</span><b>MARKET FEED</b><span>UNAVAILABLE</span><em>—</em></div>"
+
+chart_asset = latest["asset"] if latest else "BTCUSDT"
+chart_source = "unavailable"
+try:
+    bars, chart_source = klines_with_source(chart_asset, limit=48)
+    prices = [float(b["c"]) for b in bars[-36:]]
+    lo, hi = min(prices), max(prices)
+    span = (hi - lo) or 1
+    pts = []
+    for i, price in enumerate(prices):
+        xx = i / (len(prices)-1) * 100
+        yy = 88 - ((price-lo)/span)*70
+        pts.append(f"{xx:.2f},{yy:.2f}")
+    chart_points = " ".join(pts)
+except Exception:
+    chart_points = "0,60 15,48 30,52 45,42 60,44 75,35 100,31"
+
+if latest:
+    direction = latest.get("direction", "—")
+    arrow = "↑" if direction == "UP" else "↓"
+    dir_cls = "up" if direction == "UP" else "down"
+    state = latest_res.get("outcome") if latest_res else "LOCKED"
+    latest_block = f'''
+    <div class="asset-lock">
+      <div class="asset-icon">{esc(latest["asset"].replace("USDT","")[:2])}</div>
+      <div>
+        <h3>{esc(latest["asset"].replace("USDT",""))} / USD</h3>
+        <div class="lock-dir {dir_cls}">{arrow} {esc(direction)}</div>
+        <div class="lock-prob">{float(latest.get("probability",0))*100:.1f}<small>%</small></div>
+        <span class="micro">MODEL PROBABILITY</span>
+      </div>
+    </div>
+    <div class="forecast-facts">
+      <div><span>Entry observation</span><b>{esc(latest_ev.get("entry","—"))}</b></div>
+      <div><span>Target move</span><b>{esc(latest.get("target_pct","—"))}%</b></div>
+      <div><span>Horizon</span><b>{esc(latest.get("horizon_hours","—"))}H</b></div>
+      <div><span>Decision threshold</span><b>53.0%</b></div>
+      <div><span>Locked at</span><b>{esc(latest.get("created_at","—"))[:19]} UTC</b></div>
+      <div><span>Status</span><b>{esc(state)}</b></div>
+    </div>'''
+    def w(v, scale, base=22):
+        try:
+            return min(100, abs(float(v))*scale + base)
+        except Exception:
+            return base
+    why_block = f'''
+    <div class="why-row"><span>Momentum 6H</span><i style="width:{w(latest_ev.get("r6","0"),1800):.0f}%"></i><b>{esc(latest_ev.get("r6","—"))}</b></div>
+    <div class="why-row"><span>Momentum 24H</span><i style="width:{w(latest_ev.get("r24","0"),900):.0f}%"></i><b>{esc(latest_ev.get("r24","—"))}</b></div>
+    <div class="why-row"><span>Price deviation</span><i style="width:{w(latest_ev.get("z","0"),28):.0f}%"></i><b>{esc(latest_ev.get("z","—"))}</b></div>
+    <div class="why-row"><span>Volume ratio</span><i style="width:{w(latest_ev.get("vr","0"),42,18):.0f}%"></i><b>{esc(latest_ev.get("vr","—"))}</b></div>'''
+    proof_hash = latest.get("proof_hash", "—")
+else:
+    latest_block = '<div class="empty-state">NO LOCKED FORECAST YET</div>'
+    why_block = '<div class="empty-state">WAITING FOR QUALIFIED SIGNAL</div>'
+    proof_hash = "—"
+
+bins = [(0.50,0.60),(0.60,0.70),(0.70,0.80),(0.80,0.90),(0.90,1.01)]
+cal_rows = []
+for lo, hi in bins:
+    vals = [(p,a) for p,a in scored if lo <= p < hi]
+    obs = (sum(a for _,a in vals)/len(vals)) if vals else None
+    obs_text = "—" if obs is None else f"{obs*100:.1f}%"
+    cal_rows.append(f"<tr><td>{int(lo*100)}–{int(min(1,hi)*100)}%</td><td>{obs_text}</td><td>{len(vals)}</td></tr>")
+cal_html = "".join(cal_rows)
+
+recent = []
+for p in reversed(preds[-6:]):
+    r = resmap.get(p["id"])
+    st = r.get("outcome") if r else "LOCKED"
+    recent.append(
+        f"<tr><td>{esc(p['id'][-6:])}</td><td>{esc(p['asset'].replace('USDT',''))}</td>"
+        f"<td>{esc(p['direction'])}</td><td>{float(p['probability'])*100:.1f}%</td><td>{esc(st)}</td></tr>"
+    )
+recent_html = "".join(recent) if recent else "<tr><td colspan='5'>No public predictions yet.</td></tr>"
+
+page = f'''<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#091126">
-<title>SEE IT COMING. — Scientific Forward Intelligence</title>
-<meta name="description" content="Forward-locked market forecasts. No edits. No deleted losses. Reality keeps the score.">
-<!-- SIC-UI-2026-09-26-SCIENTIFIC-V2 -->
+<meta name="theme-color" content="#06101f">
+<title>SEE IT COMING. — Observatory</title>
+<meta name="description" content="Forward-locked market intelligence. From chaos to signal.">
+<!-- SIC-OBSERVATORY-CHAOS-V3 -->
 <style>
-:root{{--bg:#08101f;--card:#101b39;--line:#2b3f75;--ice:#f8fbff;--muted:#9baed4;--cobalt:#4f7cff;--violet:#9a65ff;--coral:#ff6688;--mint:#48f0bd;--cyan:#57d9ff}}
-*{{box-sizing:border-box}}html{{scroll-behavior:smooth}}body{{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:linear-gradient(180deg,#07101f 0%,#0a1430 42%,#08101f 100%);color:var(--ice)}}
-body:before{{content:"";position:fixed;inset:0;pointer-events:none;background:radial-gradient(circle at 18% 0%,rgba(79,124,255,.32),transparent 27%),radial-gradient(circle at 82% 5%,rgba(154,101,255,.28),transparent 24%),radial-gradient(circle at 70% 42%,rgba(255,102,136,.11),transparent 18%)}}
-.wrap{{width:min(1240px,calc(100% - 34px));margin:auto;position:relative}}
-nav{{height:80px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(151,176,230,.18)}}.brand{{font-size:20px;font-weight:950;letter-spacing:-.04em}}.brand i{{font-style:normal;color:var(--coral)}}.navstate{{font-size:10px;letter-spacing:.17em;color:#9eb2da}}.navstate b{{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--cyan);box-shadow:0 0 18px var(--cyan);margin-right:8px}}
-.hero{{min-height:640px;padding:72px 0 60px;display:grid;grid-template-columns:1.06fr .94fr;gap:58px;align-items:center}}.eyebrow{{display:block;color:#8eb0ff;font-size:10px;letter-spacing:.2em;font-weight:900;margin-bottom:12px}}h1{{font-size:clamp(70px,9.5vw,138px);line-height:.78;letter-spacing:-.08em;margin:16px 0 30px}}h1 .grad{{background:linear-gradient(95deg,#6d91ff,#a66cff 55%,#ff6b8b);-webkit-background-clip:text;background-clip:text;color:transparent}}.hero p{{font-size:19px;line-height:1.65;color:var(--muted);max-width:720px}}.rules{{display:flex;gap:18px;flex-wrap:wrap;margin-top:26px;font-size:9px;letter-spacing:.13em;color:#7e92bb}}
-.pulse{{position:relative;border:1px solid rgba(120,151,220,.34);border-radius:30px;padding:28px;background:linear-gradient(145deg,rgba(19,32,74,.94),rgba(8,16,35,.94));box-shadow:0 35px 100px rgba(0,0,0,.33),inset 0 0 80px rgba(79,124,255,.06)}}.pulsehead{{display:flex;justify-content:space-between;font-size:9px;letter-spacing:.14em;color:#92a6cf}}.orb{{height:230px;position:relative;display:grid;place-items:center}}.orb:before,.orb:after{{content:"";position:absolute;border-radius:50%}}.orb:before{{width:178px;height:178px;background:radial-gradient(circle,rgba(87,217,255,.12),rgba(79,124,255,.06) 42%,transparent 70%);border:1px solid rgba(87,217,255,.36);box-shadow:0 0 75px rgba(79,124,255,.28)}}.orb:after{{width:112px;height:112px;border:1px solid rgba(154,101,255,.7);box-shadow:0 0 55px rgba(154,101,255,.3)}}.orb strong{{z-index:2;font-size:18px;letter-spacing:.13em}}.pipeline{{display:grid;grid-template-columns:repeat(8,1fr);gap:5px}}.pipeline span{{border-top:1px solid rgba(130,155,220,.24);padding:10px 3px;text-align:center;font-size:7px;letter-spacing:.08em;color:#7f93bd}}
-section{{padding:66px 0}}.head{{display:flex;align-items:end;justify-content:space-between;border-bottom:1px solid rgba(151,176,230,.18);padding-bottom:22px;margin-bottom:26px}}h2{{font-size:44px;letter-spacing:-.05em;margin:0}}.head p{{max-width:500px;text-align:right;color:var(--muted);line-height:1.55}}
-.metrics{{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}}.metric{{padding:18px;border-radius:16px;border:1px solid rgba(120,151,220,.3);background:linear-gradient(145deg,rgba(19,32,74,.76),rgba(10,19,43,.78))}}.metric span{{display:block;font-size:8px;letter-spacing:.13em;color:#8095c0;margin-bottom:10px}}.metric b{{font-size:25px}}
-.forecasts{{display:grid;grid-template-columns:1fr 1fr;gap:14px}}.forecast-card{{padding:22px;border-radius:22px;border:1px solid rgba(120,151,220,.3);background:linear-gradient(145deg,rgba(19,32,74,.9),rgba(9,18,41,.92));box-shadow:0 20px 60px rgba(0,0,0,.18)}}.fc-top{{display:flex;justify-content:space-between;align-items:start}}.fc-top h3{{font-size:20px;margin:4px 0 0}}.label{{font-size:7px;letter-spacing:.15em;color:#7f94bf}}.state{{font-size:8px;letter-spacing:.12em;border:1px solid #4a5d91;border-radius:999px;padding:7px 9px}}.state.ok{{color:var(--mint);border-color:rgba(72,240,189,.4)}}.state.bad{{color:var(--coral);border-color:rgba(255,102,136,.45)}}.state.lock{{color:#b9c6e6}}.fc-main{{display:grid;grid-template-columns:.8fr 1.2fr;gap:20px;margin-top:24px}}.dir{{font-size:13px;font-weight:900}}.dir.up{{color:var(--mint)}}.dir.down{{color:var(--coral)}}.prob{{font-size:60px;font-weight:950;letter-spacing:-.06em;line-height:1;margin-top:6px}}.prob small{{font-size:20px}}.micro{{font-size:7px;letter-spacing:.13em;color:#7188b4}}.facts{{display:grid;grid-template-columns:1fr 1fr;gap:7px}}.facts div,.whygrid div{{padding:10px;border:1px solid rgba(108,139,204,.2);border-radius:10px;background:rgba(5,12,29,.32)}}.facts span,.whygrid span{{display:block;font-size:7px;color:#7188b4;letter-spacing:.1em;margin-bottom:5px}}.facts b,.whygrid b{{font-size:10px;word-break:break-word}}.why{{margin-top:18px;padding-top:16px;border-top:1px solid rgba(151,176,230,.16)}}.whygrid{{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:10px}}.proof{{margin-top:14px;padding-top:12px;border-top:1px solid rgba(151,176,230,.16)}}.proof span{{display:block;font-size:7px;color:#7085ad;letter-spacing:.12em}}.proof code{{display:block;margin-top:6px;color:#9db0d7;font-size:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
-.science{{display:grid;grid-template-columns:.9fr 1.1fr;gap:14px}}.science-card{{padding:24px;border-radius:20px;border:1px solid rgba(120,151,220,.3);background:linear-gradient(145deg,rgba(19,32,74,.78),rgba(9,18,41,.8))}}.science-card h3{{font-size:26px;margin:0 0 8px}}.science-card p{{font-size:13px;color:var(--muted);line-height:1.55}}.cal-row{{display:grid;grid-template-columns:65px 1fr 58px 42px;gap:9px;align-items:center;margin:13px 0;font-size:10px}}.track{{height:8px;border-radius:99px;background:#17284f;overflow:hidden}}.track i{{display:block;height:100%;background:linear-gradient(90deg,var(--cobalt),var(--violet),var(--coral))}}.cal-row small{{color:#788db8}}.anatomy{{display:grid;grid-template-columns:repeat(9,1fr);gap:5px;margin-top:20px}}.anatomy div{{padding:13px 4px;text-align:center;border:1px solid rgba(120,151,220,.26);border-radius:9px;font-size:7px;letter-spacing:.08em;color:#8ba0ca}}.anatomy div:nth-child(5){{border-color:rgba(154,101,255,.75);color:#c8adff}}.anatomy div:nth-child(6){{border-color:rgba(255,102,136,.7);color:#ffa2b7}}
-.manifesto{{margin:65px 0 85px;padding:46px;border-radius:27px;border:1px solid rgba(118,151,224,.4);background:linear-gradient(115deg,rgba(79,124,255,.18),rgba(154,101,255,.13),rgba(255,102,136,.1))}}.manifesto h3{{font-size:53px;letter-spacing:-.055em;margin:7px 0 13px}}.manifesto p{{max-width:840px;color:#a6b6d7;font-size:17px;line-height:1.65}}.empty{{padding:44px;border:1px dashed #455c91;border-radius:18px;color:#9eafd2}}
-footer{{display:flex;justify-content:space-between;padding:28px 0 44px;border-top:1px solid rgba(151,176,230,.18);color:#7388b2;font-size:9px;letter-spacing:.11em}}
-@media(max-width:950px){{.hero,.science{{grid-template-columns:1fr}}.metrics{{grid-template-columns:repeat(3,1fr)}}.forecasts{{grid-template-columns:1fr}}.head{{display:block}}.head p{{text-align:left}}}}
-@media(max-width:620px){{h1{{font-size:62px}}.metrics{{grid-template-columns:1fr 1fr}}.pipeline{{grid-template-columns:repeat(4,1fr)}}.fc-main{{grid-template-columns:1fr}}.whygrid{{grid-template-columns:1fr 1fr}}.anatomy{{grid-template-columns:repeat(3,1fr)}}footer{{display:block;line-height:2}}}}
+:root{{--bg:#050b16;--panel:#07152a;--line:#183e72;--blue:#3d79ff;--cyan:#24e5ff;--violet:#8d5cff;--pink:#ff4f9a;--coral:#ff5e78;--mint:#2ff3bd;--white:#f7fbff;--muted:#8da6ca}}
+*{{box-sizing:border-box}}html{{scroll-behavior:smooth}}body{{margin:0;background:radial-gradient(circle at 45% 8%,#112455 0,#071127 30%,#040914 75%);color:var(--white);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}body:before{{content:"";position:fixed;inset:0;pointer-events:none;background-image:linear-gradient(rgba(61,121,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(61,121,255,.035) 1px,transparent 1px);background-size:44px 44px}}
+.shell{{width:min(1480px,calc(100% - 40px));margin:auto;position:relative}}nav{{height:68px;display:flex;align-items:center;gap:38px;border-bottom:1px solid rgba(53,109,190,.35)}}.brand{{font-size:20px;font-weight:950;letter-spacing:-.04em;margin-right:20px}}.brand i{{font-style:normal;color:var(--pink)}}.navlinks{{display:flex;gap:26px;color:#a9bce0;font-size:11px}}.navlinks span:first-child{{color:#6fb6ff;text-shadow:0 0 18px #2d72ff}}.navstate{{margin-left:auto;font-size:9px;letter-spacing:.16em;color:#8fa4c9}}.navstate b{{display:inline-block;width:8px;height:8px;background:var(--mint);border-radius:50%;box-shadow:0 0 14px var(--mint);margin-right:8px}}.reald{{border:1px solid #3b79ff;padding:7px 10px;border-radius:8px;color:#70a7ff;font-weight:800;font-size:9px}}
+.hero{{display:grid;grid-template-columns:340px 1fr 310px;min-height:440px;border-bottom:1px solid rgba(53,109,190,.32)}}.hero-copy{{padding:48px 22px 35px 0;z-index:3}}.eyebrow{{display:block;color:#6fa7ff;font-size:10px;letter-spacing:.2em;font-weight:900;margin-bottom:18px}}h1{{font-size:72px;line-height:.88;letter-spacing:-.065em;margin:0 0 24px}}h1 span{{background:linear-gradient(95deg,#5fa6ff,#9d68ff 53%,#ff62a2);-webkit-background-clip:text;background-clip:text;color:transparent}}.hero-copy p{{color:#afc0df;font-size:17px;line-height:1.45}}.trust{{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:24px;font-size:8px;letter-spacing:.12em;color:#91a8cf}}
+.chaos{{position:relative;overflow:hidden;min-height:440px;background:radial-gradient(circle at 55% 50%,rgba(29,100,255,.30),transparent 34%),radial-gradient(circle at 58% 54%,rgba(148,70,255,.22),transparent 26%)}}.chaos:before{{content:"";position:absolute;left:22%;top:19%;width:430px;height:290px;border-radius:50%;border:1px solid rgba(53,186,255,.35);box-shadow:0 0 80px rgba(38,115,255,.34),inset 0 0 80px rgba(41,59,255,.18);background:radial-gradient(circle at 50% 48%,rgba(20,78,190,.18),rgba(6,13,38,.1) 55%,transparent 70%)}}.chaos:after{{content:"";position:absolute;left:30%;top:25%;width:290px;height:210px;border-radius:50%;border:1px solid rgba(165,74,255,.42);transform:rotate(-12deg)}}.scanline{{position:absolute;left:26%;top:48%;width:390px;height:1px;background:linear-gradient(90deg,transparent,#24e5ff,#9d68ff,transparent);box-shadow:0 0 16px #24e5ff;transform:rotate(-8deg)}}.noise-number{{position:absolute;font:700 10px ui-monospace,monospace;color:rgba(255,92,120,.7)}}.n1{{left:9%;top:28%}}.n2{{left:61%;top:16%;color:rgba(47,243,189,.7)}}.n3{{left:67%;top:68%}}.n4{{left:15%;top:72%;color:rgba(47,243,189,.75)}}.n5{{left:48%;top:8%}}.coin-chip{{position:absolute;width:165px;padding:10px 12px;border-radius:10px;background:rgba(6,18,40,.88);border:1px solid #284f88;box-shadow:0 8px 28px rgba(0,0,0,.25)}}.coin-chip.gain{{border-color:rgba(47,243,189,.45)}}.coin-chip.loss{{border-color:rgba(255,94,120,.5)}}.coin-chip.stale{{opacity:.48}}.coin-row{{display:flex;justify-content:space-between;align-items:center}}.coin-row b{{font-size:13px}}.gain .coin-row span{{color:var(--mint)}}.loss .coin-row span{{color:var(--coral)}}.coin-chip svg{{width:100%;height:22px;margin-top:7px}}.coin-chip polyline{{fill:none;stroke:currentColor;stroke-width:2}}.gain{{color:var(--mint)}}.loss{{color:var(--coral)}}.stale{{color:#7087af}}
+.side{{padding:12px 0 12px 14px;display:grid;grid-template-rows:1fr 1fr;gap:10px}}.sidebox,.panel{{border:1px solid #16467d;border-radius:10px;background:linear-gradient(145deg,rgba(7,21,42,.95),rgba(4,13,29,.95));overflow:hidden}}.sidebox h3,.panel-title{{font-size:11px;letter-spacing:.08em;margin:0;padding:12px 14px;border-bottom:1px solid #153e6d;color:#b9cdf0}}table{{width:100%;border-collapse:collapse}}th,td{{padding:6px 9px;text-align:left;border-bottom:1px solid rgba(32,76,125,.26);font-size:9px}}th{{color:#6f88b2;font-size:7px;letter-spacing:.1em}}.pos{{color:var(--mint)}}.neg{{color:var(--coral)}}.tape-row{{display:grid;grid-template-columns:42px 1fr 1fr 60px;gap:8px;padding:7px 10px;border-bottom:1px solid rgba(32,76,125,.25);font-size:9px}}.t-time{{color:#617ba7}}.tape-row em{{font-style:normal;text-align:right}}
+.pipeline{{margin:16px 0 12px;border:1px solid #17539a;border-radius:10px;background:linear-gradient(90deg,rgba(6,28,59,.9),rgba(7,18,45,.9));display:grid;grid-template-columns:150px repeat(8,1fr);align-items:center;overflow:hidden}}.pipe-title{{padding:18px;color:#5da4ff;font-size:11px;font-weight:900;letter-spacing:.11em}}.step{{padding:15px 6px;text-align:center;position:relative}}.step:after{{content:"→";position:absolute;right:-6px;top:22px;color:#476fa8}}.step:last-child:after{{display:none}}.step i{{display:grid;place-items:center;width:28px;height:28px;margin:auto;border-radius:50%;border:1px solid #547df0;color:#78a6ff;box-shadow:0 0 16px rgba(55,112,255,.35)}}.step:nth-child(4) i{{border-color:#b45cff;color:#b985ff}}.step:nth-child(5) i{{border-color:#ff4f9a;color:#ff7bb4}}.step:nth-child(7) i{{border-color:#24e5ff;color:#24e5ff}}.step b{{display:block;font-size:8px;margin-top:8px}}.step span{{font-size:7px;color:#7188ae}}
+.gridtop{{display:grid;grid-template-columns:1.15fr 1.1fr .8fr;gap:10px;margin-bottom:10px}}.forecast-panel{{display:grid;grid-template-columns:1.1fr 1fr;gap:16px;padding:18px}}.asset-lock{{display:flex;gap:14px;align-items:center}}.asset-icon{{width:70px;height:70px;border-radius:50%;display:grid;place-items:center;background:radial-gradient(circle,#1d64ff,#101936);border:1px solid #3e75da;font-weight:900}}.asset-lock h3{{font-size:19px;margin:0 0 5px}}.lock-dir{{font-size:17px;font-weight:900}}.lock-prob{{font-size:46px;font-weight:950;letter-spacing:-.05em;color:#29efc2}}.lock-prob small{{font-size:18px}}.micro{{font-size:7px;letter-spacing:.12em;color:#7890b9}}.forecast-facts div{{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(39,78,128,.25);font-size:9px}}.forecast-facts span{{color:#8399bf}}.whybox{{padding:15px}}.why-row{{display:grid;grid-template-columns:95px 1fr 58px;gap:9px;align-items:center;margin:12px 0;font-size:8px}}.why-row span{{color:#8ea4c7}}.why-row i{{height:8px;background:linear-gradient(90deg,#7b61ff,#29dfff);border-radius:99px;display:block}}.proofbox{{padding:16px}}.lockicon{{width:52px;height:52px;border-radius:50%;display:grid;place-items:center;border:1px solid #ff4f9a;color:#ff5a9f;box-shadow:0 0 24px rgba(255,79,154,.25);font-size:22px;margin:8px 0 14px}}.proofbox code{{display:block;font-size:8px;color:#a2b8dd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}.proofstatus{{margin-top:18px;display:flex;justify-content:space-between;font-size:8px}}.proofstatus b{{color:#ff79ad}}
+.chartbox{{padding:12px}}.chartbox svg{{width:100%;height:120px;margin-top:8px}}.chartbox polyline{{fill:none;stroke:url(#grad);stroke-width:2.2}}.gridbottom{{display:grid;grid-template-columns:1.45fr .55fr .62fr;gap:10px;margin-bottom:36px}}.score{{padding:14px}}.score-grid{{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:12px}}.score-card{{padding:15px 10px;border:1px solid #173f70;border-radius:8px;background:rgba(5,18,39,.55)}}.score-card b{{font-size:24px}}.score-card span{{display:block;color:#8ca2c6;font-size:7px;margin-top:6px}}.calbox table td,.recent table td{{font-size:8px}}footer{{border-top:1px solid rgba(53,109,190,.32);padding:24px 0 38px;display:flex;justify-content:space-between;color:#6e85aa;font-size:8px;letter-spacing:.12em}}
+.empty-state{{padding:30px;color:#7f95ba}}
+@media(max-width:1100px){{.hero{{grid-template-columns:300px 1fr}}.side{{grid-column:1/-1;grid-template-columns:1fr 1fr;grid-template-rows:auto}}.gridtop,.gridbottom{{grid-template-columns:1fr}}.pipeline{{grid-template-columns:1fr repeat(4,1fr)}}}}
+@media(max-width:720px){{.navlinks{{display:none}}.hero{{grid-template-columns:1fr}}.hero-copy{{padding-right:0}}h1{{font-size:58px}}.chaos{{min-height:520px}}.side{{grid-template-columns:1fr}}.pipeline{{grid-template-columns:1fr 1fr 1fr}}.score-grid{{grid-template-columns:1fr 1fr}}}}
 </style>
 </head>
-<body><div class="wrap">
-<nav><div class="brand">SEE IT COMING<i>.</i></div><div class="navstate"><b></b>PUBLIC FORWARD EXPERIMENT · V1.0</div></nav>
+<body>
+<div class="shell">
+<nav>
+  <div class="brand">SEE IT COMING<i>.</i></div>
+  <div class="navlinks"><span>Home</span><span>Live</span><span>Forecasts</span><span>Record</span><span>Method</span><span>About</span></div>
+  <div class="navstate"><b></b>PUBLIC FORWARD EXPERIMENT · V1.0</div>
+  <div class="reald">{system_state} · {data_health}</div>
+</nav>
 
 <section class="hero">
-<div>
-<span class="eyebrow">THE MOVE HASN'T HAPPENED YET.</span>
-<h1>SEE IT<br><span class="grad">BEFORE</span><br>IT MOVES.</h1>
-<p>Predictions are locked before outcomes. No edits. No deleted losses. Reality keeps the score.</p>
-<div class="rules"><span>FORWARD ONLY</span><span>PUBLIC PROOF</span><span>NO BACKFILLING</span><span>NO TRADE EXECUTION</span></div>
-</div>
-<div class="pulse">
-<div class="pulsehead"><span>LIVE INTELLIGENCE PIPELINE</span><span>PUBLIC RECORD</span></div>
-<div class="orb"><strong>OBSERVE</strong></div>
-<div class="pipeline"><span>OBSERVE</span><span>DETECT</span><span>PREDICT</span><span>LOCK</span><span>WAIT</span><span>RESOLVE</span><span>SCORE</span><span>LEARN</span></div>
-</div>
+  <div class="hero-copy">
+    <span class="eyebrow">THE MOVE HASN'T HAPPENED YET.</span>
+    <h1>See it<br><span>before</span><br>it moves.</h1>
+    <p>Predictions are locked before outcomes. No edits. No deleted losses. Reality keeps the score.</p>
+    <div class="trust"><span>◉ FORWARD ONLY</span><span>◉ PUBLIC PROOF</span><span>◉ NO BACKFILLING</span><span>◉ NO TRADE EXECUTION</span></div>
+  </div>
+  <div class="chaos">
+    <div class="scanline"></div>
+    <span class="noise-number n1">−2.3%</span><span class="noise-number n2">+4.1%</span><span class="noise-number n3">−1.8%</span><span class="noise-number n4">+3.9%</span><span class="noise-number n5">+0.8%</span>
+    {chips_html}
+  </div>
+  <div class="side">
+    <div class="sidebox">
+      <h3>LIVE MARKET NOISE</h3>
+      <table><thead><tr><th>ASSET</th><th>PRICE</th><th>24H</th><th>SOURCE</th></tr></thead><tbody>{noise_html}</tbody></table>
+    </div>
+    <div class="sidebox">
+      <h3>MARKET OBSERVATION TAPE</h3>
+      {tape_html}
+    </div>
+  </div>
 </section>
 
-<section>
-<div class="head"><div><span class="eyebrow">SCIENTIFIC SCOREBOARD</span><h2>Reality keeps the score.</h2></div><p>Sample size lives beside performance. Confidence is evaluated — never celebrated by itself.</p></div>
-<div class="metrics">
-<div class="metric"><span>LOCKED FORECASTS</span><b>{len(preds)}</b></div>
-<div class="metric"><span>RESOLVED</span><b>{n}</b></div>
-<div class="metric"><span>CORRECT</span><b>{correct}</b></div>
-<div class="metric"><span>ACCURACY</span><b>{pct(accuracy)}</b></div>
-<div class="metric"><span>BRIER SCORE</span><b>{dec(brier)}</b></div>
-<div class="metric"><span>EDGE STATUS</span><b>{"INSUFFICIENT DATA" if n < 50 else "EVALUATING"}</b></div>
-</div>
-</section>
-
-<section>
-<div class="head"><div><span class="eyebrow">FORWARD-LOCKED FORECASTS</span><h2>Prediction → proof → outcome.</h2></div><p>Every forecast is a scientific object with direction, probability, evidence, horizon and immutable proof.</p></div>
-<div class="forecasts">{cards_html}</div>
-</section>
-
-<section>
-<div class="head"><div><span class="eyebrow">MODEL SCIENCE</span><h2>Confidence must earn trust.</h2></div><p>A 70% forecast is meaningful only when comparable forecasts resolve correctly around 70% of the time.</p></div>
-<div class="science">
-<div class="science-card"><span class="eyebrow">CALIBRATION</span><h3>Predicted vs observed.</h3><p>Observed success rate inside each confidence band. Empty bins remain visibly empty.</p>{cal_html}</div>
-<div class="science-card"><span class="eyebrow">PREDICTION ANATOMY</span><h3>A complete chain of custody.</h3><p>Observation, inference, commitment and outcome are separated so a later result cannot silently rewrite the original call.</p>
-<div class="anatomy"><div>OBSERVATION</div><div>FEATURES</div><div>MODEL VOTES</div><div>ENSEMBLE</div><div>PROBABILITY</div><div>LOCK</div><div>WAIT</div><div>RESOLUTION</div><div>SCORE</div></div>
-</div>
-</div>
-</section>
-
-<div class="manifesto">
-<span class="eyebrow">THE STANDARD</span>
-<h3>DON'T TRUST THE MODEL.<br>CHECK THE RECORD.</h3>
-<p>Every call is timestamped before the outcome. Every loss remains public. A signal is not an edge, and a streak is not evidence. Credibility must be earned through forward observations, calibration and honest scoring.</p>
+<div class="pipeline">
+  <div class="pipe-title">THE INTELLIGENCE<br>PIPELINE</div>
+  <div class="step"><i>◉</i><b>OBSERVE</b><span>Market data</span></div>
+  <div class="step"><i>⌁</i><b>DETECT</b><span>Anomalies</span></div>
+  <div class="step"><i>△</i><b>PREDICT</b><span>Model ensemble</span></div>
+  <div class="step"><i>▣</i><b>LOCK</b><span>Immutable proof</span></div>
+  <div class="step"><i>◷</i><b>WAIT</b><span>Market decides</span></div>
+  <div class="step"><i>✓</i><b>RESOLVE</b><span>Measure outcome</span></div>
+  <div class="step"><i>∑</i><b>SCORE</b><span>Update record</span></div>
+  <div class="step"><i>↗</i><b>LEARN</b><span>Improve next version</span></div>
 </div>
 
-<footer><span>SEE IT COMING. · PROOF BEFORE PERSUASION.</span><span>EXPERIMENTAL · NOT FINANCIAL ADVICE</span></footer>
-</div></body></html>'''
+<div class="gridtop">
+  <div class="panel">
+    <div class="panel-title">LATEST LOCKED FORECAST</div>
+    <div class="forecast-panel">{latest_block}</div>
+  </div>
+  <div class="panel">
+    <div class="panel-title">WHY IT FIRED</div>
+    <div class="whybox">{why_block}</div>
+    <div class="proofbox">
+      <div class="lockicon">▣</div>
+      <span class="micro">LOCKED PROOF · SHA-256</span>
+      <code>{esc(proof_hash)}</code>
+      <div class="proofstatus"><span>Status</span><b>{"RESOLVED" if latest_res else "LOCKED"}</b></div>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-title">PRICE CHART · {esc(chart_asset.replace("USDT",""))} · {esc(chart_source)}</div>
+    <div class="chartbox">
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+        <defs><linearGradient id="grad"><stop offset="0%" stop-color="#3d79ff"/><stop offset="100%" stop-color="#b05cff"/></linearGradient></defs>
+        <polyline points="{chart_points}"/>
+      </svg>
+    </div>
+  </div>
+</div>
 
-out=Path("site")
-out.mkdir(exist_ok=True)
-(out/"index.html").write_text(page)
-(out/"ledger.json").write_text(json.dumps(data,indent=2))
-print("Built SCIENTIFIC V2 UI:", out/"index.html")
+<div class="gridbottom">
+  <div class="panel score">
+    <div class="panel-title">SCIENTIFIC SCOREBOARD · PUBLIC FORWARD RECORD</div>
+    <div class="score-grid">
+      <div class="score-card"><b>{len(preds)}</b><span>LOCKED</span></div>
+      <div class="score-card"><b>{n_res}</b><span>RESOLVED</span></div>
+      <div class="score-card"><b>{correct}</b><span>CORRECT</span></div>
+      <div class="score-card"><b>{pct(accuracy)}</b><span>ACCURACY</span></div>
+      <div class="score-card"><b>{dec(brier)}</b><span>BRIER SCORE</span></div>
+      <div class="score-card"><b>{"INSUFFICIENT DATA" if n_res < 50 else "EVALUATING"}</b><span>EDGE STATUS</span></div>
+    </div>
+  </div>
+  <div class="panel calbox">
+    <div class="panel-title">CALIBRATION</div>
+    <table><thead><tr><th>CONFIDENCE</th><th>OBSERVED</th><th>N</th></tr></thead><tbody>{cal_html}</tbody></table>
+  </div>
+  <div class="panel recent">
+    <div class="panel-title">RECENT PREDICTIONS</div>
+    <table><thead><tr><th>#</th><th>ASSET</th><th>DIR</th><th>PROB.</th><th>STATUS</th></tr></thead><tbody>{recent_html}</tbody></table>
+  </div>
+</div>
+
+<footer><span>SEE IT COMING. · FROM CHAOS TO SIGNAL.</span><span>PROOF BEFORE PERSUASION · EXPERIMENTAL · NOT FINANCIAL ADVICE</span></footer>
+</div>
+</body></html>'''
+
+(OUT/"index.html").write_text(page)
+(OUT/"ledger.json").write_text(json.dumps(data, indent=2))
+(OUT/"market.json").write_text(json.dumps(radar, indent=2))
+print("Built OBSERVATORY CHAOS V3:", OUT/"index.html", "| market:", system_state, data_health)

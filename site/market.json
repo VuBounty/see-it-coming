@@ -1,0 +1,200 @@
+[
+  {
+    "symbol": "BTCUSDT",
+    "price": 84180.77,
+    "r1": 1.0097419907317828e-05,
+    "r6": 0.003111069642893094,
+    "r24": -0.004751211359683261,
+    "z": 1.4355552268844205,
+    "vr": 0.2584411490083795,
+    "direction": "DOWN",
+    "confidence": 0.5508,
+    "anomaly": 0.479,
+    "models": [
+      {
+        "name": "momentum-v1",
+        "direction": "UP",
+        "probability": 0.5165,
+        "raw": 0.01649
+      },
+      {
+        "name": "breakout-v1",
+        "direction": "UP",
+        "probability": 0.8439,
+        "raw": 0.34387
+      },
+      {
+        "name": "mean-reversion-v1",
+        "direction": "DOWN",
+        "probability": 0.95,
+        "raw": -0.4862
+      }
+    ],
+    "source": "Binance"
+  },
+  {
+    "symbol": "XRPUSDT",
+    "price": 1.549,
+    "r1": -0.0016756896107245067,
+    "r6": -0.00064516129032266,
+    "r24": -0.028657427729353535,
+    "z": -1.0876269098713507,
+    "vr": 0.2419141036736332,
+    "direction": "DOWN",
+    "confidence": 0.5884,
+    "anomaly": 0.363,
+    "models": [
+      {
+        "name": "momentum-v1",
+        "direction": "DOWN",
+        "probability": 0.6014,
+        "raw": -0.10137
+      },
+      {
+        "name": "breakout-v1",
+        "direction": "DOWN",
+        "probability": 0.95,
+        "raw": -0.45835
+      },
+      {
+        "name": "mean-reversion-v1",
+        "direction": "UP",
+        "probability": 0.8954,
+        "raw": 0.39541
+      }
+    ],
+    "source": "Binance"
+  },
+  {
+    "symbol": "SOLUSDT",
+    "price": 120.64,
+    "r1": 8.289811821282633e-05,
+    "r6": 0.0009956853634252028,
+    "r24": -0.0014898195662969016,
+    "z": -0.742507491042858,
+    "vr": 0.3018920828495185,
+    "direction": "DOWN",
+    "confidence": 0.5329,
+    "anomaly": 0.248,
+    "models": [
+      {
+        "name": "momentum-v1",
+        "direction": "UP",
+        "probability": 0.5054,
+        "raw": 0.00539
+      },
+      {
+        "name": "breakout-v1",
+        "direction": "DOWN",
+        "probability": 0.8496,
+        "raw": -0.34961
+      },
+      {
+        "name": "mean-reversion-v1",
+        "direction": "UP",
+        "probability": 0.7861,
+        "raw": 0.28606
+      }
+    ],
+    "source": "Binance"
+  },
+  {
+    "symbol": "BNBUSDT",
+    "price": 774.72,
+    "r1": 0.0008914383163443063,
+    "r6": 0.002367736676629262,
+    "r24": -0.005838797849269106,
+    "z": 0.35354016314760295,
+    "vr": 0.27608045088853833,
+    "direction": "DOWN",
+    "confidence": 0.5574,
+    "anomaly": 0.118,
+    "models": [
+      {
+        "name": "momentum-v1",
+        "direction": "UP",
+        "probability": 0.5051,
+        "raw": 0.0051
+      },
+      {
+        "name": "breakout-v1",
+        "direction": "UP",
+        "probability": 0.5288,
+        "raw": 0.02882
+      },
+      {
+        "name": "mean-reversion-v1",
+        "direction": "DOWN",
+        "probability": 0.6352,
+        "raw": -0.13523
+      }
+    ],
+    "source": "Binance"
+  },
+  {
+    "symbol": "DOGEUSDT",
+    "price": 0.09785,
+    "r1": -0.0026500866374477017,
+    "r6": 0.004207717569786551,
+    "r24": -0.0020397756246811616,
+    "z": -0.22299493890647862,
+    "vr": 0.28790180989769126,
+    "direction": "DOWN",
+    "confidence": 0.5235,
+    "anomaly": 0.074,
+    "models": [
+      {
+        "name": "momentum-v1",
+        "direction": "UP",
+        "probability": 0.537,
+        "raw": 0.03699
+      },
+      {
+        "name": "breakout-v1",
+        "direction": "DOWN",
+        "probability": 0.6756,
+        "raw": -0.17563
+      },
+      {
+        "name": "mean-reversion-v1",
+        "direction": "UP",
+        "probability": 0.5972,
+        "raw": 0.09724
+      }
+    ],
+    "source": "Binance"
+  },
+  {
+    "symbol": "ETHUSDT",
+    "price": 2689.11,
+    "r1": 0.0006549202746199967,
+    "r6": 0.0009827022077300018,
+    "r24": -0.010458026222341599,
+    "z": 0.19468083820264884,
+    "vr": 0.37207526628901794,
+    "direction": "DOWN",
+    "confidence": 0.5656,
+    "anomaly": 0.065,
+    "models": [
+      {
+        "name": "momentum-v1",
+        "direction": "DOWN",
+        "probability": 0.5248,
+        "raw": -0.0248
+      },
+      {
+        "name": "breakout-v1",
+        "direction": "DOWN",
+        "probability": 0.5153,
+        "raw": -0.01527
+      },
+      {
+        "name": "mean-reversion-v1",
+        "direction": "DOWN",
+        "probability": 0.5757,
+        "raw": -0.07566
+      }
+    ],
+    "source": "Binance"
+  }
+]
