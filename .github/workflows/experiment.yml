@@ -11,18 +11,25 @@ concurrency:
 jobs:
   cycle:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v5
-        with: {fetch-depth: 0}
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v6
-        with: {python-version: '3.12'}
-      - name: Run forward cycle
-        env: {SIC_MIN_CONFIDENCE: '0.53'}
+        with:
+          python-version: '3.12'
+      - name: Run one forward-test cycle
+        env:
+          SIC_MIN_CONFIDENCE: "0.53"
         run: python scripts/run_cycle.py
-      - run: python scripts/verify_ledger.py
-      - run: python scripts/build_pages.py
-      - name: Commit public record
+      - name: Verify immutable ledger
+        run: python scripts/verify_ledger.py
+      - name: Build V3.2 public observatory
+        run: python scripts/build_pages.py
+      - name: Verify V3.2 data/UI contract
+        run: python scripts/check_v32.py
+      - name: Commit public record and snapshot
         run: |
           git config user.name "see-it-coming-bot"
           git config user.email "actions@users.noreply.github.com"

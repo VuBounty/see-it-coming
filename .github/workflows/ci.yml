@@ -7,10 +7,36 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: {python-version: "3.12"}
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - run: pip install -r requirements.txt
-      - run: python -m compileall -q app
+      - run: python -m compileall -q app scripts
       - run: PYTHONPATH=. pytest -q
       - run: python scripts/verify_ledger.py data/ledger.json
+      - run: python scripts/build_pages.py
+      - run: python scripts/check_v32.py
+      - name: Validate browser JavaScript syntax
+        run: |
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          text=Path('site/index.html').read_text()
+          scripts=re.findall(r'<script(?: [^>]*)?>(.*?)</script>', text, re.S)
+          js=[s for s in scripts if 'snapshot-data' not in s]
+          Path('/tmp/sic-v32.js').write_text(js[-1])
+          PY
+          node --check /tmp/sic-v32.js
+      - name: Smoke-test local HTTP server
+        run: |
+          PORT=8765 PYTHONPATH=. python -m app.main >/tmp/sic-server.log 2>&1 &
+          PID=$!
+          trap 'kill $PID || true' EXIT
+          sleep 2
+          curl -fsS http://127.0.0.1:8765/ | grep -q 'SIC-OBSERVATORY-CHAOS-V3.2-MOTION'
+          curl -fsS http://127.0.0.1:8765/health | python -m json.tool >/dev/null
+          curl -fsS http://127.0.0.1:8765/snapshot.json | python -m json.tool >/dev/null
