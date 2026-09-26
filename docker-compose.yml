@@ -1,0 +1,13 @@
+services:
+  web:
+    build: .
+    ports: ["8080:8080"]
+    environment: ["SIC_LEDGER=/data/ledger.json"]
+    volumes: ["sic-data:/data"]
+  experiment:
+    build: .
+    command: ["python","-m","app.runner"]
+    environment: ["SIC_LEDGER=/data/ledger.json","SIC_CYCLE_SECONDS=3600"]
+    volumes: ["sic-data:/data"]
+volumes:
+  sic-data:

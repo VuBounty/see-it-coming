@@ -1,0 +1,31 @@
+name: Public Forward Experiment
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 * * * *'
+permissions:
+  contents: write
+concurrency:
+  group: public-forward-experiment
+  cancel-in-progress: false
+jobs:
+  cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run one forward-test cycle
+        run: python scripts/run_cycle.py
+      - name: Verify ledger
+        run: python scripts/verify_ledger.py
+      - name: Commit ledger changes
+        run: |
+          git config user.name "see-it-coming-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/ledger.json
+          git diff --cached --quiet && exit 0
+          git commit -m "experiment: forward cycle"
+          git push
